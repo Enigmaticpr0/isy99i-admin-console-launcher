@@ -1,0 +1,8 @@
+Package: isy99i-admin-console-launcher
+Version: 1.1-beta7
+Section: utils
+Priority: optional
+Architecture: amd64
+Maintainer: Derek Schultz <derekjonschultz@icloud.com>
+Depends: zenity, curl, wget, python3-tk, lsof
+Description: Launcher for ISY-99i Admin Console w/ Automated Dependency Detector and Setup.

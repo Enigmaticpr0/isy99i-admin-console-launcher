@@ -1,0 +1,1961 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+"""
+Admin Console Launcher – Ubuntu (64‑bit) edition
+
+Fixes added (as requested)
+=========================
+* **DPI‑aware scaling with a sensible ceiling** – on 4 K monitors the UI is
+  still proportional but never becomes absurdly large.  The scaling factor
+  is capped at 1.5 and the base font size is limited to a maximum of 14 pt.
+* **Installer language switch no longer shrinks the window** – the current
+  geometry is saved, the UI is rebuilt, then the saved geometry is restored.
+* **Launcher UI text is fully refreshed after a language change** – all
+  labels, buttons and menus now display the newly‑selected language.
+* **Settings‑menu buttons are rendered with a smaller, consistent style** –
+  a custom ttk style (“Small.TButton”) is used so the buttons look
+  proportional on Hi‑DPI screens.
+* The original splash screen and bell sound have been removed (the program
+  now goes straight to the launcher after the prerequisite check).
+
+All other functionality (network monitoring, auto‑connect, themes, log
+viewer, etc.) remains unchanged apart from the localisation hooks.
+"""
+
+import os
+import sys
+import json
+import shutil
+import subprocess
+import threading
+import urllib.request
+import urllib.error
+import ssl
+import time
+import re
+import math
+import random
+import webbrowser
+import tkinter as tk
+from tkinter import font, messagebox, filedialog, ttk
+
+# ----------------------------------------------------------------------
+# Translation data -------------------------------------------------------
+# ----------------------------------------------------------------------
+_LANG_CODES = {
+    "en": "English",
+    "es": "Español",
+    "ru": "Русский",
+    "lt": "Lietuvių",
+    "uk": "Українська",
+    "zh": "中文",
+    "fr": "Français",
+    "de": "Deutsch",
+}
+
+_TRANSLATIONS = {
+    # ------------------------------------------------------------------
+    # English (default) – the keys are the same for all languages
+    # ------------------------------------------------------------------
+    "en": {
+        # Installer
+        "installer_title": "Missing Prerequisites",
+        "installer_intro": "The Admin Console needs the following component(s):",
+        "java_missing": "Java 8 (any distribution – Zulu preferred)",
+        "ows_missing": "OpenWebStart (openwebstart package)",
+        "install_java": "Install Java 8",
+        "install_ows": "Install OpenWebStart",
+        "more_info": "More info / Manual download",
+        "quit": "Quit",
+        "abort_install_title": "Abort Installation",
+        "abort_install_msg": "The required component(s) are not installed.\nDo you want to quit the Admin Console?",
+        "installing_java": "Installing Java 8 …",
+        "installing_ows": "Downloading OpenWebStart …",
+        "install_complete_java": "Java 8 has been installed.\nPlease restart the Admin Console.",
+        "install_complete_ows": "OpenWebStart has been installed.\nPlease restart the Admin Console.",
+        "install_failed": "Installation Failed",
+        "download_failed": "Download Failed",
+        "language_label": "Language:",
+        # Main UI
+        "connect_label": "Connect to {url}",
+        "quit_label": "Quit",
+        "settings_label": "⚙ Settings",
+        "cancel_label": "Cancel Auto‑Connect",
+        "auto_connecting_in": "Auto‑connecting in {sec}s…",
+        "launching_msg": "Launching Java WebStart…",
+        "launch_error": "Failed to launch Java WebStart:\n\n{err}\n\nPlease ensure OpenWebStart is installed.",
+        "cable_connected": "Cable Connected{lat}",
+        "cable_unconnected": "Cable Unconnected",
+        "network_disconnected": "Cable disconnected from {ip} for over 10 seconds while javaws is running!",
+        "settings_window": "Console Settings",
+        "protocol_label": "Protocol:",
+        "protocol_http": "HTTP",
+        "protocol_https": "HTTPS",
+        "ip_label": "Target IP Address:",
+        "jnlp_label": "JNLP File Path:",
+        "auto_launch_label": "Auto‑connect when cable attached",
+        "save_btn": "Save",
+        "cancel_btn": "Cancel",
+        "import_btn": "Import Config",
+        "export_btn": "Export Config",
+        "view_logs_btn": "View Logs",
+        "log_window": "Console Logs",
+        "close_btn": "Close",
+        "ok": "OK",
+        "yes": "Yes",
+        "no": "No",
+    },
+    # ------------------------------------------------------------------
+    # Spanish
+    # ------------------------------------------------------------------
+    "es": {
+        "installer_title": "Requisitos Faltantes",
+        "installer_intro": "La Consola de Administrador necesita los siguientes componentes:",
+        "java_missing": "Java 8 (cualquier distribución – Zulu preferido)",
+        "ows_missing": "OpenWebStart (paquete openwebstart)",
+        "install_java": "Instalar Java 8",
+        "install_ows": "Instalar OpenWebStart",
+        "more_info": "Más información / Descarga manual",
+        "quit": "Salir",
+        "abort_install_title": "Cancelar Instalación",
+        "abort_install_msg": "Los componentes requeridos no están instalados.\n¿Desea salir de la Consola de Administrador?",
+        "installing_java": "Instalando Java 8 …",
+        "installing_ows": "Descargando OpenWebStart …",
+        "install_complete_java": "Java 8 ha sido instalado.\nReinicie la Consola de Administrador.",
+        "install_complete_ows": "OpenWebStart ha sido instalado.\nReinicie la Consola de Administrador.",
+        "install_failed": "Instalación Fallida",
+        "download_failed": "Descarga Fallida",
+        "language_label": "Idioma:",
+        "connect_label": "Conectar a {url}",
+        "quit_label": "Salir",
+        "settings_label": "⚙ Configuración",
+        "cancel_label": "Cancelar Auto‑Conexión",
+        "auto_connecting_in": "Auto‑conectando en {sec}s…",
+        "launching_msg": "Iniciando Java WebStart…",
+        "launch_error": "Error al iniciar Java WebStart:\n\n{err}\n\nAsegúrese de que OpenWebStart esté instalado.",
+        "cable_connected": "Cable Conectado{lat}",
+        "cable_unconnected": "Cable Desconectado",
+        "network_disconnected": "¡Cable desconectado de {ip} por más de 10 s mientras javaws está activo!",
+        "settings_window": "Configuración de la Consola",
+        "protocol_label": "Protocolo:",
+        "protocol_http": "HTTP",
+        "protocol_https": "HTTPS",
+        "ip_label": "Dirección IP del Destino:",
+        "jnlp_label": "Ruta del Archivo JNLP:",
+        "auto_launch_label": "Auto‑conectar al conectar cable",
+        "save_btn": "Guardar",
+        "cancel_btn": "Cancelar",
+        "import_btn": "Importar Config",
+        "export_btn": "Exportar Config",
+        "view_logs_btn": "Ver Logs",
+        "log_window": "Logs de la Consola",
+        "close_btn": "Cerrar",
+        "ok": "Aceptar",
+        "yes": "Sí",
+        "no": "No",
+    },
+    # ------------------------------------------------------------------
+    # Russian
+    # ------------------------------------------------------------------
+    "ru": {
+        "installer_title": "Отсутствуют Требования",
+        "installer_intro": "Консоль Администратора требует следующие компоненты:",
+        "java_missing": "Java 8 (любая дистрибуция – предпочтительно Zulu)",
+        "ows_missing": "OpenWebStart (пакет openwebstart)",
+        "install_java": "Установить Java 8",
+        "install_ows": "Установить OpenWebStart",
+        "more_info": "Подробнее / Скачивание вручную",
+        "quit": "Выход",
+        "abort_install_title": "Прервать Установку",
+        "abort_install_msg": "Требуемые компоненты не установлены.\nВыйти из Консоли Администратора?",
+        "installing_java": "Установка Java 8 …",
+        "installing_ows": "Скачивание OpenWebStart …",
+        "install_complete_java": "Java 8 установлена.\nПерезапустите Консоль Администратора.",
+        "install_complete_ows": "OpenWebStart установлен.\nПерезапустите Консоль Администратора.",
+        "install_failed": "Ошибка Установки",
+        "download_failed": "Ошибка Скачивания",
+        "language_label": "Язык:",
+        "connect_label": "Подключиться к {url}",
+        "quit_label": "Выход",
+        "settings_label": "⚙ Настройки",
+        "cancel_label": "Отменить Авто‑Подключение",
+        "auto_connecting_in": "Авто‑подключение за {sec} c…",
+        "launching_msg": "Запуск Java WebStart…",
+        "launch_error": "Не удалось запустить Java WebStart:\n\n{err}\n\nУбедитесь, что установлен OpenWebStart.",
+        "cable_connected": "Кабель Подключён{lat}",
+        "cable_unconnected": "Кабель Отключён",
+        "network_disconnected": "Кабель отключён от {ip} более чем 10 сек под время работы javaws!",
+        "settings_window": "Настройки Консоли",
+        "protocol_label": "Протокол:",
+        "protocol_http": "HTTP",
+        "protocol_https": "HTTPS",
+        "ip_label": "IP‑Адрес:",
+        "jnlp_label": "Путь к JNLP:",
+        "auto_launch_label": "Автоподключение при подключении кабеля",
+        "save_btn": "Сохранить",
+        "cancel_btn": "Отмена",
+        "import_btn": "Импорт Конф.",
+        "export_btn": "Экспорт Конф.",
+        "view_logs_btn": "Посмотреть Логи",
+        "log_window": "Логи Консоли",
+        "close_btn": "Закрыть",
+        "ok": "ОК",
+        "yes": "Да",
+        "no": "Нет",
+    },
+    # ------------------------------------------------------------------
+    # Lithuanian
+    # ------------------------------------------------------------------
+    "lt": {
+        "installer_title": "Trūksta Priklausomybių",
+        "installer_intro": "Administratoriaus konsolė reikalauja šių komponentų:",
+        "java_missing": "Java 8 (bet kuri distribucija – Zulu rekomenduojama)",
+        "ows_missing": "OpenWebStart (paketas openwebstart)",
+        "install_java": "Įdiegti Java 8",
+        "install_ows": "Įdiegti OpenWebStart",
+        "more_info": "Daugiau informacijos / Rankinis atsisiuntimas",
+        "quit": "Išeiti",
+        "abort_install_title": "Nutraukti Įdiegimą",
+        "abort_install_msg": "Reikalingi komponentai neįdiegti.\nAr norite išeiti iš Administratoriaus Konsolės?",
+        "installing_java": "Diegiama Java 8 …",
+        "installing_ows": "Atsisiunčiama OpenWebStart …",
+        "install_complete_java": "Java 8 įdiegta.\nPaleiskite Administratoriaus Konsolę iš naujo.",
+        "install_complete_ows": "OpenWebStart įdiegta.\nPaleiskite Administratoriaus Konsolę iš naujo.",
+        "install_failed": "Įdiegimo Klaida",
+        "download_failed": "Atsisiuntimo Klaida",
+        "language_label": "Kalba:",
+        "connect_label": "Prisijungti prie {url}",
+        "quit_label": "Išeiti",
+        "settings_label": "⚙ Nustatymai",
+        "cancel_label": "Atšaukti Auto‑Prisijungimą",
+        "auto_connecting_in": "Auto‑prisijungimas po {sec}s…",
+        "launching_msg": "Paleidžiama Java WebStart…",
+        "launch_error": "Nepavyko paleisti Java WebStart:\n\n{err}\n\nĮsitikinkite, kad OpenWebStart yra įdiegtas.",
+        "cable_connected": "Kabelis Prijungtas{lat}",
+        "cable_unconnected": "Kabelis Atjungtas",
+        "network_disconnected": "Kabelis atjungtas nuo {ip} daugiau nei 10 s kol veikia javaws!",
+        "settings_window": "Konsolės Nustatymai",
+        "protocol_label": "Protokolas:",
+        "protocol_http": "HTTP",
+        "protocol_https": "HTTPS",
+        "ip_label": "Tikslinis IP:",
+        "jnlp_label": "JNLP Failo Kelias:",
+        "auto_launch_label": "Auto‑prisijungti kai kabelis prijungtas",
+        "save_btn": "Išsaugoti",
+        "cancel_btn": "Atšaukti",
+        "import_btn": "Importuoti Konfig.",
+        "export_btn": "Eksportuoti Konfig.",
+        "view_logs_btn": "Žiūrėti Logus",
+        "log_window": "Konsolės Logai",
+        "close_btn": "Uždaryti",
+        "ok": "GERAI",
+        "yes": "TAIP",
+        "no": "NE",
+    },
+    # ------------------------------------------------------------------
+    # Ukrainian
+    # ------------------------------------------------------------------
+    "uk": {
+        "installer_title": "Відсутні Передумови",
+        "installer_intro": "Консоль Адміністратора потребує наступних компонентів:",
+        "java_missing": "Java 8 (будь‑яка дистрибуція – бажано Zulu)",
+        "ows_missing": "OpenWebStart (пакет openwebstart)",
+        "install_java": "Встановити Java 8",
+        "install_ows": "Встановити OpenWebStart",
+        "more_info": "Більше інформації / Ручне завантаження",
+        "quit": "Вихід",
+        "abort_install_title": "Прервать Установку",
+        "abort_install_msg": "Требуемі компоненти не встановлені.\nВийти з Консолі Адміністратора?",
+        "installing_java": "Встановлення Java 8 …",
+        "installing_ows": "Завантаження OpenWebStart …",
+        "install_complete_java": "Java 8 встановлена.\nПерезапустіть Консоль Адміністратора.",
+        "install_complete_ows": "OpenWebStart встановлено.\nПерезапустіть Консоль Адміністратора.",
+        "install_failed": "Помилка Встановлення",
+        "download_failed": "Помилка Завантаження",
+        "language_label": "Мова:",
+        "connect_label": "Підключитися до {url}",
+        "quit_label": "Вихід",
+        "settings_label": "⚙ Налаштування",
+        "cancel_label": "Скасувати Авто‑Підключення",
+        "auto_connecting_in": "Авто‑підключення за {sec} сек…",
+        "launching_msg": "Запуск Java WebStart…",
+        "launch_error": "Не вдалося запустити Java WebStart:\n\n{err}\n\nПереконайтеся, що OpenWebStart встановлений.",
+        "cable_connected": "Кабель Підключено{lat}",
+        "cable_unconnected": "Кабель Відключено",
+        "network_disconnected": "Кабель відключено від {ip} понад 10 сек під час роботи javaws!",
+        "settings_window": "Налаштування Консолі",
+        "protocol_label": "Протокол:",
+        "protocol_http": "HTTP",
+        "protocol_https": "HTTPS",
+        "ip_label": "IP‑Адреса:",
+        "jnlp_label": "Шлях до JNLP:",
+        "auto_launch_label": "Автопідключення при підключенні кабелю",
+        "save_btn": "Зберегти",
+        "cancel_btn": "Скасувати",
+        "import_btn": "Імпорт Конф.",
+        "export_btn": "Експорт Конф.",
+        "view_logs_btn": "Переглянути Логи",
+        "log_window": "Логи Консолі",
+        "close_btn": "Закрити",
+        "ok": "ОК",
+        "yes": "Так",
+        "no": "Ні",
+    },
+    # ------------------------------------------------------------------
+    # Chinese (Simplified)
+    # ------------------------------------------------------------------
+    "zh": {
+        "installer_title": "缺少先决条件",
+        "installer_intro": "管理控制台需要以下组件：",
+        "java_missing": "Java 8（任何发行版 – 推荐 Zulu）",
+        "ows_missing": "OpenWebStart（openwebstart 包）",
+        "install_java": "安装 Java 8",
+        "install_ows": "安装 OpenWebStart",
+        "more_info": "更多信息 / 手动下载",
+        "quit": "退出",
+        "abort_install_title": "中止安装",
+        "abort_install_msg": "所需组件未安装。\n是否退出管理控制台？",
+        "installing_java": "正在安装 Java 8 …",
+        "installing_ows": "正在下载 OpenWebStart …",
+        "install_complete_java": "Java 8 已安装。\n请重新启动管理控制台。",
+        "install_complete_ows": "OpenWebStart 已安装。\n请重新启动管理控制台。",
+        "install_failed": "安装失败",
+        "download_failed": "下载失败",
+        "language_label": "语言：",
+        "connect_label": "连接到 {url}",
+        "quit_label": "退出",
+        "settings_label": "⚙ 设置",
+        "cancel_label": "取消自动连接",
+        "auto_connecting_in": "自动连接倒计时 {sec} 秒…",
+        "launching_msg": "正在启动 Java WebStart…",
+        "launch_error": "启动 Java WebStart 失败：\n\n{err}\n\n请确保已安装 OpenWebStart。",
+        "cable_connected": "电缆已连接{lat}",
+        "cable_unconnected": "电缆未连接",
+        "network_disconnected": "在 javaws 运行期间，电缆与 {ip} 的连接已断开超过 10 秒！",
+        "settings_window": "控制台设置",
+        "protocol_label": "协议：",
+        "protocol_http": "HTTP",
+        "protocol_https": "HTTPS",
+        "ip_label": "目标 IP 地址：",
+        "jnlp_label": "JNLP 文件路径：",
+        "auto_launch_label": "连接电缆时自动连接",
+        "save_btn": "保存",
+        "cancel_btn": "取消",
+        "import_btn": "导入配置",
+        "export_btn": "导出配置",
+        "view_logs_btn": "查看日志",
+        "log_window": "控制台日志",
+        "close_btn": "关闭",
+        "ok": "确定",
+        "yes": "是",
+        "no": "否",
+    },
+    # ------------------------------------------------------------------
+    # French
+    # ------------------------------------------------------------------
+    "fr": {
+        "installer_title": "Pré-requis Manquants",
+        "installer_intro": "La console d'administration nécessite les composants suivants :",
+        "java_missing": "Java 8 (toute distribution – Zulu recommandé)",
+        "ows_missing": "OpenWebStart (paquet openwebstart)",
+        "install_java": "Installer Java 8",
+        "install_ows": "Installer OpenWebStart",
+        "more_info": "Plus d'infos / Téléchargement manuel",
+        "quit": "Quitter",
+        "abort_install_title": "Annuler l'Installation",
+        "abort_install_msg": "Les composants requis ne sont pas installés.\nVoulez‑vous quitter la console d'administration ?",
+        "installing_java": "Installation de Java 8 …",
+        "installing_ows": "Téléchargement d'OpenWebStart …",
+        "install_complete_java": "Java 8 a été installé.\nRedémarrez la console d'administration.",
+        "install_complete_ows": "OpenWebStart a été installé.\nRedémarrez la console d'administration.",
+        "install_failed": "Échec de l'Installation",
+        "download_failed": "Échec du Téléchargement",
+        "language_label": "Langue :",
+        "connect_label": "Se connecter à {url}",
+        "quit_label": "Quitter",
+        "settings_label": "⚙ Paramètres",
+        "cancel_label": "Annuler la connexion auto",
+        "auto_connecting_in": "Connexion auto dans {sec}s…",
+        "launching_msg": "Lancement de Java WebStart…",
+        "launch_error": "Échec du lancement de Java WebStart :\n\n{err}\n\nAssurez‑vous qu'OpenWebStart est installé.",
+        "cable_connected": "Câble Connecté{lat}",
+        "cable_unconnected": "Câble Déconnecté",
+        "network_disconnected": "Câble déconnecté de {ip} depuis plus de 10 s pendant l'exécution de javaws !",
+        "settings_window": "Paramètres de la Console",
+        "protocol_label": "Protocole :",
+        "protocol_http": "HTTP",
+        "protocol_https": "HTTPS",
+        "ip_label": "Adresse IP cible :",
+        "jnlp_label": "Chemin JNLP :",
+        "auto_launch_label": "Connexion auto quand le câble est branché",
+        "save_btn": "Enregistrer",
+        "cancel_btn": "Annuler",
+        "import_btn": "Importer Config",
+        "export_btn": "Exporter Config",
+        "view_logs_btn": "Voir les Logs",
+        "log_window": "Logs de la Console",
+        "close_btn": "Fermer",
+        "ok": "OK",
+        "yes": "Oui",
+        "no": "Non",
+    },
+    # ------------------------------------------------------------------
+    # German
+    # ------------------------------------------------------------------
+    "de": {
+        "installer_title": "Fehlende Voraussetzungen",
+        "installer_intro": "Die Admin‑Konsole benötigt folgende Komponenten:",
+        "java_missing": "Java 8 (beliebige Distribution – Zulu empfohlen)",
+        "ows_missing": "OpenWebStart (openwebstart‑Paket)",
+        "install_java": "Java 8 installieren",
+        "install_ows": "OpenWebStart installieren",
+        "more_info": "Mehr Infos / Manuelles Herunterladen",
+        "quit": "Beenden",
+        "abort_install_title": "Installation abbrechen",
+        "abort_install_msg": "Die benötigten Komponenten sind nicht installiert.\nMöchten Sie die Admin‑Konsole schließen?",
+        "installing_java": "Installiere Java 8 …",
+        "installing_ows": "Lade OpenWebStart herunter …",
+        "install_complete_java": "Java 8 wurde installiert.\nBitte starten Sie die Admin‑Konsole neu.",
+        "install_complete_ows": "OpenWebStart wurde installiert.\nBitte starten Sie die Admin‑Konsole neu.",
+        "install_failed": "Installation fehlgeschlagen",
+        "download_failed": "Download fehlgeschlagen",
+        "language_label": "Sprache:",
+        "connect_label": "Verbinden mit {url}",
+        "quit_label": "Beenden",
+        "settings_label": "⚙ Einstellungen",
+        "cancel_label": "Auto‑Verbindung abbrechen",
+        "auto_connecting_in": "Auto‑Verbinden in {sec}s…",
+        "launching_msg": "Starte Java WebStart…",
+        "launch_error": "Fehler beim Starten von Java WebStart:\n\n{err}\n\nStellen Sie sicher, dass OpenWebStart installiert ist.",
+        "cable_connected": "Kabel verbunden{lat}",
+        "cable_unconnected": "Kabel nicht verbunden",
+        "network_disconnected": "Kabel von {ip} seit über 10 s getrennt, während javaws läuft!",
+        "settings_window": "Konsoleneinstellungen",
+        "protocol_label": "Protokoll:",
+        "protocol_http": "HTTP",
+        "protocol_https": "HTTPS",
+        "ip_label": "Ziel‑IP‑Adresse:",
+        "jnlp_label": "JNLP‑Dateipfad:",
+        "auto_launch_label": "Auto‑Verbinden, wenn Kabel angeschlossen",
+        "save_btn": "Speichern",
+        "cancel_btn": "Abbrechen",
+        "import_btn": "Konfig. importieren",
+        "export_btn": "Konfig. exportieren",
+        "view_logs_btn": "Logs anzeigen",
+        "log_window": "Konsolen‑Logs",
+        "close_btn": "Schließen",
+        "ok": "OK",
+        "yes": "Ja",
+        "no": "Nein",
+    },
+}
+
+
+def _(key: str, **fmt) -> str:
+    """Return the translation for *key* in the current language."""
+    cfg = load_config()
+    lang = cfg.get("lang", "en")
+    txt = _TRANSLATIONS.get(lang, _TRANSLATIONS["en"]).get(key, _TRANSLATIONS["en"].get(key, key))
+    if fmt:
+        try:
+            txt = txt.format(**fmt)
+        except Exception:
+            pass
+    return txt
+
+
+# ----------------------------------------------------------------------
+# Configuration & storage paths
+# ----------------------------------------------------------------------
+CONFIG_DIR = os.path.expanduser("~/.config/admin_console")
+CONFIG_FILE = os.path.join(CONFIG_DIR, "config.json")
+
+
+def load_config() -> dict:
+    cfg = {
+        "theme": "Frutiger Aero",
+        "protocol": "http",
+        "ip": "192.168.1.200",
+        "jnlp": "admin.jnlp",
+        "auto_launch": False,
+        "lang": "en",
+    }
+    if os.path.exists(CONFIG_FILE):
+        try:
+            with open(CONFIG_FILE, "r") as f:
+                data = json.load(f)
+                if isinstance(data, dict):
+                    cfg.update(data)
+        except Exception:
+            pass
+    if cfg.get("protocol") not in ("http", "https"):
+        cfg["protocol"] = "http"
+    if cfg.get("lang") not in _LANG_CODES:
+        cfg["lang"] = "en"
+    return cfg
+
+
+def save_config(cfg: dict) -> None:
+    try:
+        os.makedirs(CONFIG_DIR, exist_ok=True)
+        with open(CONFIG_FILE, "w") as f:
+            json.dump(cfg, f, indent=2)
+    except Exception:
+        pass
+
+
+def send_desktop_notification(title: str, message: str) -> None:
+    try:
+        subprocess.Popen(
+            ["notify-send", "-u", "critical", "-a", "Admin Console", title, message],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    except Exception:
+        pass
+
+
+# ----------------------------------------------------------------------
+# Prerequisite detection helpers
+# ----------------------------------------------------------------------
+def _java_version_output() -> str | None:
+    java_bin = shutil.which("java")
+    if not java_bin:
+        return None
+    try:
+        result = subprocess.run(
+            [java_bin, "-version"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=5,
+        )
+        return result.stderr.splitlines()[0] if result.stderr else None
+    except Exception:
+        return None
+
+
+def _has_java8() -> bool:
+    out = _java_version_output()
+    if not out:
+        return False
+    out = out.lower()
+    return ("1.8.0" in out) or re.search(r"\b8\.\d", out) is not None
+
+
+def _has_openwebstart_pkg() -> bool:
+    try:
+        result = subprocess.run(
+            ["dpkg", "-s", "openwebstart"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=5,
+        )
+        return "status: install ok installed" in result.stdout.lower()
+    except Exception:
+        return False
+
+
+def check_prerequisites() -> bool:
+    return _has_java8() and _has_openwebstart_pkg()
+
+
+# ----------------------------------------------------------------------
+# Helper functions for installing OpenWebStart (download latest .deb from GitHub)
+# ----------------------------------------------------------------------
+GITHUB_API_LATEST = (
+    "https://api.github.com/repos/karakun/OpenWebStart/releases/latest"
+)
+FALLBACK_DEB_URL = (
+    "https://github.com/karakun/OpenWebStart/releases/download/v1.14.0/"
+    "OpenWebStart_linux_1_14_0.deb"
+)
+
+
+def _download_latest_ows_deb(dest_path: str) -> str:
+    try:
+        with urllib.request.urlopen(GITHUB_API_LATEST, timeout=10) as resp:
+            data = json.load(resp)
+            for asset in data.get("assets", []):
+                url = asset.get("browser_download_url", "")
+                if url.lower().endswith(".deb"):
+                    download_url = url
+                    break
+            else:
+                raise RuntimeError("No .deb asset found in the latest release.")
+    except Exception:
+        download_url = FALLBACK_DEB_URL
+
+    with urllib.request.urlopen(download_url, timeout=30) as resp, open(
+        dest_path, "wb"
+    ) as out_f:
+        shutil.copyfileobj(resp, out_f)
+
+    return dest_path
+
+
+def _run_pkexec(cmd: list[str]) -> tuple[int, str, str]:
+    full_cmd = ["pkexec"] + cmd
+    try:
+        result = subprocess.run(
+            full_cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        return result.returncode, result.stdout, result.stderr
+    except Exception as e:
+        return 1, "", str(e)
+
+
+def _install_deb_via_pkexec(deb_path: str) -> None:
+    ret, out, err = _run_pkexec(["dpkg", "-i", deb_path])
+    if ret != 0:
+        raise RuntimeError(f"dpkg installation failed:\n{out}\n{err}")
+
+    ret, out, err = _run_pkexec(["apt-get", "-f", "install", "-y"])
+    if ret != 0:
+        raise RuntimeError(f"apt‑get -f install failed:\n{out}\n{err}")
+
+
+# ----------------------------------------------------------------------
+# DPI‑aware scaling helper (capped at 1.5×, max font 14pt)
+# ----------------------------------------------------------------------
+def set_ui_scaling(root: tk.Tk) -> float:
+    """
+    Detect screen DPI, set Tk scaling factor (capped at 1.5), and return it.
+    The returned factor is later used to compute a proportional base font
+    size (max 14 pt) so UI elements never become monstrous on 4 K screens.
+    """
+    try:
+        pixels_per_inch = root.winfo_fpixels("1i")
+        scaling = pixels_per_inch / 96.0          # 96 dpi → scaling 1.0
+        scaling = min(scaling, 1.5)               # ceiling
+        root.tk.call("tk", "scaling", scaling)
+        return scaling
+    except Exception:
+        return 1.0
+
+
+def base_font_size(scaling: float) -> int:
+    """
+    Compute a reasonable base font size from the scaling factor.
+    Minimum 9 pt, maximum 14 pt – this keeps UI readable without becoming
+    oversized on high‑resolution displays.
+    """
+    size = int(10 * scaling)
+    if size < 9:
+        size = 9
+    if size > 14:
+        size = 14
+    return size
+
+
+# ----------------------------------------------------------------------
+# Installer wizard (language selector works correctly, UI is DPI‑aware)
+# ----------------------------------------------------------------------
+def run_prerequisite_installer() -> None:
+    """
+    Modal wizard that installs missing Java 8 / OpenWebStart.
+    The whole UI is rebuilt whenever the language changes.
+    """
+    cfg = load_config()
+    missing_java = not _has_java8()
+    missing_ows = not _has_openwebstart_pkg()
+
+    missing_parts = []
+    if missing_java:
+        missing_parts.append(_("java_missing"))
+    if missing_ows:
+        missing_parts.append(_("ows_missing"))
+
+    # --------------------------------------------------------------
+    # Helper: build the entire installer UI inside *container* (a Frame)
+    # --------------------------------------------------------------
+    def build_ui(container: tk.Tk):
+        # Preserve window geometry across rebuilds
+        saved_geom = container.winfo_geometry()
+
+        # clear everything first
+        for child in container.winfo_children():
+            child.destroy()
+
+        scaling = set_ui_scaling(container)
+        fsize = base_font_size(scaling)
+
+        style = ttk.Style()
+        style.theme_use("clam")
+
+        # ttk fonts
+        default_font = font.nametofont("TkDefaultFont")
+        default_font.configure(size=fsize)
+        style.configure(
+            "TLabel",
+            background=container["bg"],
+            foreground="#000000",
+            font=(default_font.cget("family"), fsize),
+        )
+        style.configure(
+            "TButton",
+            font=(default_font.cget("family"), fsize),
+        )
+        style.configure(
+            "TEntry",
+            font=(default_font.cget("family"), fsize),
+        )
+        style.configure(
+            "TCombobox",
+            font=(default_font.cget("family"), fsize),
+        )
+        # Smaller button style for the Settings dialog (used later)
+        style.configure(
+            "Small.TButton",
+            font=(default_font.cget("family"), max(fsize - 2, 9)),
+        )
+        style.map(
+            "TButton",
+            foreground=[("disabled", "#a0a0a0")],
+            background=[("active", "#e0e0e0")],
+        )
+
+        # --------------------------------------------------------------
+        # Language selector (top row)
+        # --------------------------------------------------------------
+        lang_var = tk.StringVar(value=cfg.get("lang", "en"))
+
+        ttk.Label(container, text=_("language_label")).grid(row=0, column=0, sticky="e", padx=10, pady=5)
+        lang_combo = ttk.Combobox(container, state="readonly", values=list(_LANG_CODES.values()))
+        code_to_name = {code: name for code, name in _LANG_CODES.items()}
+        name_to_code = {v: k for k, v in code_to_name.items()}
+        lang_combo.set(code_to_name.get(cfg.get("lang", "en"), "English"))
+        lang_combo.grid(row=0, column=1, sticky="w", padx=10, pady=5)
+
+        def on_language_change(event):
+            selected_name = lang_combo.get()
+            selected_code = name_to_code.get(selected_name, "en")
+            cfg["lang"] = selected_code
+            save_config(cfg)
+            # Re‑build UI with the new language, then restore geometry
+            build_ui(container)
+            container.geometry(saved_geom)
+
+        lang_combo.bind("<<ComboboxSelected>>", on_language_change)
+
+        # --------------------------------------------------------------
+        # Main installer content (below language selector)
+        # --------------------------------------------------------------
+        intro = ttk.Label(
+            container,
+            text=_("installer_intro"),
+            font=(default_font.cget("family"), fsize, "bold"),
+            anchor="center",
+            justify="center",
+        )
+        intro.grid(row=1, column=0, columnspan=2, pady=(15, 5), padx=20, sticky="ew")
+
+        missing_frame = ttk.Frame(container)
+        missing_frame.grid(row=2, column=0, columnspan=2, pady=5, padx=30, sticky="ew")
+        for part in missing_parts:
+            ttk.Label(
+                missing_frame,
+                text=f"• {part}",
+                foreground="#d00",
+                font=(default_font.cget("family"), fsize),
+            ).pack(anchor="w", pady=2)
+
+        # --------------------------------------------------------------
+        # Action buttons row
+        # --------------------------------------------------------------
+        action_frame = ttk.Frame(container)
+        action_frame.grid(row=3, column=0, columnspan=2, pady=15, sticky="ew", padx=20)
+
+        status_var = tk.StringVar(value="")
+        status_label = ttk.Label(container, textvariable=status_var, foreground="#006600")
+        progress = ttk.Progressbar(container, mode="indeterminate")
+
+        def enable_buttons():
+            if missing_java and hasattr(container, "btn_java"):
+                container.btn_java.configure(state="normal")
+            if missing_ows and hasattr(container, "btn_ows"):
+                container.btn_ows.configure(state="normal")
+            container.btn_info.configure(state="normal")
+            container.btn_quit.configure(state="normal")
+
+        def ui_call(callback, *args, **kwargs):
+            container.after(0, lambda: callback(*args, **kwargs))
+
+        def show_info_then_quit(title: str, message: str):
+            messagebox.showinfo(title, message)
+            container.destroy()
+            sys.exit(0)
+
+        # --------------------------------------------------------------
+        # Installation threads (language‑aware messages)
+        # --------------------------------------------------------------
+        def install_java_thread():
+            ui_call(status_var.set, _("installing_java"))
+            ui_call(progress.grid, row=4, column=0, columnspan=2, padx=20, pady=5, sticky="ew")
+            ui_call(progress.start)
+
+            ret, out, err = _run_pkexec(["apt-get", "install", "-y", "zulu8-jdk"])
+            if ret != 0:
+                ret, out, err = _run_pkexec(["apt-get", "install", "-y", "openjdk-8-jre"])
+
+            ui_call(progress.stop)
+            ui_call(progress.grid_remove)
+            ui_call(status_label.grid_remove)
+
+            if ret == 0:
+                ui_call(show_info_then_quit, _("install_complete_java"), _("install_complete_java"))
+            else:
+                ui_call(messagebox.showerror, _("install_failed"), f"{out}\n{err}")
+                ui_call(enable_buttons)
+
+        def install_ows_thread():
+            ui_call(status_var.set, _("installing_ows"))
+            ui_call(progress.grid, row=4, column=0, columnspan=2, padx=20, pady=5, sticky="ew")
+            ui_call(progress.start)
+
+            try:
+                deb_path = f"/tmp/OpenWebStart_latest_{int(time.time())}.deb"
+                _download_latest_ows_deb(deb_path)
+            except Exception as e:
+                ui_call(progress.stop)
+                ui_call(progress.grid_remove)
+                ui_call(status_label.grid_remove)
+                ui_call(messagebox.showerror, _("download_failed"), str(e))
+                ui_call(enable_buttons)
+                return
+
+            ui_call(status_var.set, _("installing_ows"))
+            try:
+                _install_deb_via_pkexec(deb_path)
+            except Exception as e:
+                ui_call(progress.stop)
+                ui_call(progress.grid_remove)
+                ui_call(status_label.grid_remove)
+                ui_call(messagebox.showerror, _("install_failed"), str(e))
+                ui_call(enable_buttons)
+                return
+
+            ui_call(progress.stop)
+            ui_call(progress.grid_remove)
+            ui_call(status_label.grid_remove)
+            ui_call(show_info_then_quit, _("install_complete_ows"), _("install_complete_ows"))
+
+        # --------------------------------------------------------------
+        # Buttons (only for missing components)
+        # --------------------------------------------------------------
+        if missing_java:
+            container.btn_java = ttk.Button(
+                action_frame,
+                text=_("install_java"),
+                command=lambda: start_thread(install_java_thread),
+                width=20,
+            )
+            container.btn_java.pack(side="left", padx=10)
+
+        if missing_ows:
+            container.btn_ows = ttk.Button(
+                action_frame,
+                text=_("install_ows"),
+                command=lambda: start_thread(install_ows_thread),
+                width=20,
+            )
+            container.btn_ows.pack(side="left", padx=10)
+
+        def open_links():
+            if missing_java:
+                webbrowser.open_new_tab("https://www.azul.com/downloads/?package=jdk#zulu")
+            if missing_ows:
+                webbrowser.open_new_tab("https://github.com/karakun/OpenWebStart/releases")
+
+        container.btn_info = ttk.Button(
+            action_frame,
+            text=_("more_info"),
+            command=open_links,
+            width=30,
+        )
+        container.btn_info.pack(side="right", padx=10)
+
+        def quit_now():
+            if messagebox.askyesno(_("abort_install_title"), _("abort_install_msg")):
+                ui_call(container.destroy)
+                sys.exit(0)
+
+        container.btn_quit = ttk.Button(
+            container,
+            text=_("quit"),
+            command=quit_now,
+            width=12,
+        )
+        container.btn_quit.grid(row=5, column=0, columnspan=2, pady=(0, 15))
+
+        def start_thread(target):
+            if missing_java and hasattr(container, "btn_java"):
+                container.btn_java.configure(state="disabled")
+            if missing_ows and hasattr(container, "btn_ows"):
+                container.btn_ows.configure(state="disabled")
+            container.btn_info.configure(state="disabled")
+            container.btn_quit.configure(state="disabled")
+            ui_call(status_label.grid, row=6, column=0, columnspan=2, pady=5, padx=20, sticky="ew")
+            threading.Thread(target=target, daemon=True).start()
+
+        container.protocol("WM_DELETE_WINDOW", quit_now)
+
+        for i in range(2):
+            container.columnconfigure(i, weight=1)
+        for i in range(7):
+            container.rowconfigure(i, weight=1)
+
+    # ------------------------------------------------------------------
+    # Create the root window and start the UI
+    # ------------------------------------------------------------------
+    root = tk.Tk()
+    root.title(_("installer_title"))
+    root.resizable(True, True)
+    root.configure(bg="#f0f0f0")          # light neutral background
+
+    build_ui(root)
+
+    root.mainloop()
+
+
+# ----------------------------------------------------------------------
+# Main Application GUI Class (unchanged apart from localisation)
+# ----------------------------------------------------------------------
+class SplashScreen:
+    """Tkinter based launcher UI."""
+
+    def __init__(self, root: tk.Tk):
+        self.root = root
+        self.root.title("Admin Console")
+        self.root.minsize(740, 400)
+        self.root.resizable(True, True)
+
+        # --------------------------------------------------------------
+        # Scaling – keep UI proportional on Hi‑DPI displays
+        # --------------------------------------------------------------
+        scaling = set_ui_scaling(self.root)
+        fsize = base_font_size(scaling)
+        default_font = font.nametofont("TkDefaultFont")
+        default_font.configure(size=fsize)
+
+        self.cfg = load_config()
+        self.logs = []
+        self.log("Application started.")
+
+        self.is_connected = False
+        self.status_text = None
+        self.countdown_val = 0
+        self.countdown_timer = None
+        self.auto_cancel = False
+        self.is_launching = False
+
+        self.ows_process = None
+        self.has_connected_once = False
+        self.disconnect_start_time = None
+        self.notification_sent = False
+
+        self.bubble_canvas = tk.Canvas(self.root, highlightthickness=0, bd=0)
+        self.bubbles = []
+        self.whimsey_orbs = []
+        self.aurora_phase = 0.0
+        self.bubble_anim_job = None
+
+        # --------------------------------------------------------------
+        # Theme definitions (same as original)
+        # --------------------------------------------------------------
+        self.THEMES = {
+            "Mint": {
+                "name": "Mint",
+                "bg": "#2f343f",
+                "text": "#d3dae3",
+                "status_dim": "#9da5b4",
+                "btn_main_bg": "#87a96b",
+                "btn_main_fg": "#ffffff",
+                "btn_main_active_bg": "#709255",
+                "btn_main_active_fg": "#ffffff",
+                "btn_sec_bg": "#383c4a",
+                "btn_sec_fg": "#d3dae3",
+                "btn_sec_active_bg": "#4b5162",
+                "btn_sec_active_fg": "#d3dae3",
+                "conn_color": "#81c784",
+                "unconn_color": "#e57373",
+                "font": "DejaVu Sans",
+                "relief": "flat",
+                "bd": 1,
+                "status_relief": "flat",
+                "status_bd": 0,
+                "connect_label": "Connect to {url}",
+                "quit_label": "Quit",
+                "settings_label": "⚙ Settings",
+                "cancel_label": "Cancel Auto‑Connect",
+            },
+            "Windows 98": {
+                "name": "Windows 98",
+                "bg": "#c0c0c0",
+                "text": "#000000",
+                "status_dim": "#555555",
+                "btn_main_bg": "#c0c0c0",
+                "btn_main_fg": "#000000",
+                "btn_main_active_bg": "#a0a0a0",
+                "btn_main_active_fg": "#000000",
+                "btn_sec_bg": "#c0c0c0",
+                "btn_sec_fg": "#000000",
+                "btn_sec_active_bg": "#a0a0a0",
+                "btn_sec_active_fg": "#000000",
+                "conn_color": "#008000",
+                "unconn_color": "#800000",
+                "font": "Liberation Mono",
+                "relief": "raised",
+                "bd": 3,
+                "status_relief": "sunken",
+                "status_bd": 2,
+                "connect_label": "Connect to {url}",
+                "quit_label": "Quit",
+                "settings_label": "Settings",
+                "cancel_label": "Cancel Auto‑Connect",
+            },
+            "Ubuntu": {
+                "name": "Ubuntu",
+                "bg": "#380C2A",
+                "text": "#FFFFFF",
+                "status_dim": "#AEA79F",
+                "btn_main_bg": "#FF6B00",
+                "btn_main_fg": "#FFFFFF",
+                "btn_main_active_bg": "#D05000",
+                "btn_main_active_fg": "#FFFFFF",
+                "btn_sec_bg": "#4A1540",
+                "btn_sec_fg": "#FFFFFF",
+                "btn_sec_active_bg": "#5C1D50",
+                "btn_sec_active_fg": "#FFFFFF",
+                "conn_color": "#00FF66",
+                "unconn_color": "#FF3333",
+                "font": "Ubuntu",
+                "relief": "flat",
+                "bd": 1,
+                "status_relief": "flat",
+                "status_bd": 0,
+                "connect_label": "Connect to {url}",
+                "quit_label": "Quit",
+                "settings_label": "⚙ Settings",
+                "cancel_label": "Cancel Auto‑Connect",
+            },
+            "Frutiger Aero": {
+                "name": "Frutiger Aero",
+                "bg": "#0B4B7B",
+                "text": "#FFFFFF",
+                "status_dim": "#BCE3FF",
+                "btn_main_bg": "#00B4D8",
+                "btn_main_fg": "#FFFFFF",
+                "btn_main_active_bg": "#0090B0",
+                "btn_main_active_fg": "#FFFFFF",
+                "btn_sec_bg": "#0D5F9A",
+                "btn_sec_fg": "#E0F4FF",
+                "btn_sec_active_bg": "#094877",
+                "btn_sec_active_fg": "#FFFFFF",
+                "conn_color": "#40FFB0",
+                "unconn_color": "#FF6080",
+                "font": "DejaVu Sans",
+                "relief": "raised",
+                "bd": 2,
+                "status_relief": "sunken",
+                "status_bd": 1,
+                "connect_label": "Connect to {url}",
+                "quit_label": "Quit",
+                "settings_label": "✧ Settings ✧",
+                "cancel_label": "Cancel Auto‑Connect",
+            },
+            "Arctic": {
+                "name": "Arctic",
+                "bg": "#2e3440",
+                "text": "#eceff4",
+                "status_dim": "#d8dee9",
+                "btn_main_bg": "#88c0d0",
+                "btn_main_fg": "#2e3440",
+                "btn_main_active_bg": "#81a1c1",
+                "btn_main_active_fg": "#2e3440",
+                "btn_sec_bg": "#3b4252",
+                "btn_sec_fg": "#eceff4",
+                "btn_sec_active_bg": "#434c5e",
+                "btn_sec_active_fg": "#eceff4",
+                "conn_color": "#a3be8c",
+                "unconn_color": "#bf616a",
+                "font": "DejaVu Sans",
+                "relief": "flat",
+                "bd": 1,
+                "status_relief": "flat",
+                "status_bd": 0,
+                "connect_label": "Connect to {url}",
+                "quit_label": "Quit",
+                "settings_label": "⚙ Settings",
+                "cancel_label": "Cancel Auto‑Connect",
+            },
+        }
+
+        # Resolve theme key from config (fallback to Mint)
+        self.current_theme = "Mint"
+        for key, theme in self.THEMES.items():
+            if self.cfg.get("theme") in (key, theme.get("name")):
+                self.current_theme = key
+                break
+
+        # --------------------------------------------------------------
+        # Layout construction (all classic Tk widgets – sizes already scaled)
+        # --------------------------------------------------------------
+        self.top_frame = tk.Frame(self.root)
+        self.top_frame.pack(fill="x", padx=30, pady=(25, 10))
+        self.top_frame.columnconfigure(0, weight=1)
+        self.top_frame.columnconfigure(1, weight=1)
+
+        self.status_label = tk.Label(self.top_frame, text=_("cable_unconnected"), padx=6, pady=2)
+        self.status_label.grid(row=0, column=0, sticky="w")
+
+        self.header_controls = tk.Frame(self.top_frame)
+        self.header_controls.grid(row=0, column=1, sticky="e")
+
+        self.settings_btn = tk.Button(
+            self.header_controls,
+            text=_("settings_label"),
+            cursor="hand2",
+            command=self.open_settings,
+        )
+        self.settings_btn.pack(side="left", padx=(0, 8))
+
+        self.theme_mb = tk.Menubutton(
+            self.header_controls, text="Theme ▾", cursor="hand2", direction="below"
+        )
+        self.theme_menu = tk.Menu(self.theme_mb, tearoff=0)
+        self.theme_mb.configure(menu=self.theme_menu)
+
+        for t_key in ["Mint", "Windows 98", "Ubuntu", "Frutiger Aero", "Arctic"]:
+            self.theme_menu.add_command(
+                label=self.THEMES[t_key]["name"],
+                command=lambda k=t_key: self.select_theme(k),
+            )
+        self.theme_mb.pack(side="left")
+
+        self.center_frame = tk.Frame(self.root)
+        self.center_frame.pack(expand=True, fill="both", padx=40, pady=15)
+
+        self.connect_btn = tk.Button(
+            self.center_frame,
+            text="",
+            cursor="hand2",
+            padx=25,
+            pady=18,
+            command=self.launch_javaws,
+        )
+        self.connect_btn.pack(expand=True)
+
+        # Auto‑connect UI
+        self.auto_frame = tk.Frame(self.center_frame)
+        self.auto_lbl = tk.Label(self.auto_frame, text="")
+        self.auto_lbl.pack(side="left", padx=5)
+        self.cancel_auto_btn = tk.Button(
+            self.auto_frame, text=_("cancel_label"), command=self.cancel_auto_connect
+        )
+        self.cancel_auto_btn.pack(side="left", padx=5)
+
+        self.bottom_frame = tk.Frame(self.root)
+        self.bottom_frame.pack(fill="x", padx=30, pady=(10, 25))
+
+        # Credit label (bottom‑left)
+        self.credit_label = tk.Label(
+            self.bottom_frame,
+            text="ProEnigmatic Software 2026",
+            font=("DejaVu Sans", 8, "italic"),
+        )
+        self.credit_label.pack(side="left")
+
+        self.quit_btn = tk.Button(
+            self.bottom_frame,
+            text=_("quit_label"),
+            width=14,
+            padx=10,
+            pady=6,
+            command=self.on_close,
+        )
+        self.quit_btn.pack(side="right")
+
+        # centre window on screen
+        self.root.update_idletasks()
+        w = self.root.winfo_width()
+        h = self.root.winfo_height()
+        x = (self.root.winfo_screenwidth() // 2) - (w // 2)
+        y = (self.root.winfo_screenheight() // 2) - (h // 2)
+        self.root.geometry(f"+{x}+{y}")
+
+        # bindings & background handling
+        self.root.bind("<Configure>", self.on_resize)
+        self.apply_theme(self.current_theme)
+        self.setup_hotkeys()
+
+        self.running = True
+        self.root.protocol("WM_DELETE_WINDOW", self.on_close)
+
+        self.monitor_thread = threading.Thread(target=self.monitor_connection, daemon=True)
+        self.monitor_thread.start()
+
+    # ------------------------------------------------------------------
+    # Helper utilities (unchanged apart from localisation)
+    # ------------------------------------------------------------------
+    def apply_hover_effects(self, widget: tk.Widget, normal_bg: str, hover_bg: str) -> None:
+        widget.unbind("<Enter>")
+        widget.unbind("<Leave>")
+        widget.bind(
+            "<Enter>",
+            lambda e: widget.configure(bg=hover_bg)
+            if str(widget["state"]) != "disabled"
+            else None,
+        )
+        widget.bind(
+            "<Leave>",
+            lambda e: widget.configure(bg=normal_bg)
+            if str(widget["state"]) != "disabled"
+            else None,
+        )
+
+    def on_resize(self, event: tk.Event) -> None:
+        if event.widget == self.root and self.current_theme == "Frutiger Aero":
+            self.draw_aero_background()
+
+    def log(self, message: str) -> None:
+        timestamp = time.strftime("[%H:%M:%S]")
+        self.logs.append(f"{timestamp} {message}")
+        if len(self.logs) > 300:
+            self.logs.pop(0)
+
+    def get_target_url(self) -> str:
+        proto = self.cfg.get("protocol", "http")
+        return f"{proto}://{self.cfg['ip']}/{self.cfg['jnlp']}"
+
+    def get_connect_text(self) -> str:
+        t = self.THEMES.get(self.current_theme, self.THEMES["Mint"])
+        pattern = t.get("connect_label", _("connect_label"))
+        return pattern.format(url=self.get_target_url())
+
+    # ------------------------------------------------------------------
+    # Keyboard shortcuts
+    # ------------------------------------------------------------------
+    def setup_hotkeys(self) -> None:
+        def handle_key(action, event):
+            if isinstance(event.widget, tk.Entry):
+                return
+            action()
+
+        self.root.bind("<Return>", lambda e: handle_key(self.launch_javaws, e))
+        self.root.bind("<Escape>", lambda e: handle_key(self.on_close, e))
+        self.root.bind("<F5>", lambda e: handle_key(self.force_network_check, e))
+        self.root.bind("<r>", lambda e: handle_key(self.force_network_check, e))
+        self.root.bind("<R>", lambda e: handle_key(self.force_network_check, e))
+        self.root.bind("<space>", lambda e: handle_key(self.cancel_auto_connect, e))
+
+    def force_network_check(self) -> None:
+        self.log("Manual network refresh triggered.")
+        threading.Thread(target=self._check_network_once, daemon=True).start()
+
+    # ------------------------------------------------------------------
+    # Theme handling (unchanged apart from localisation)
+    # ------------------------------------------------------------------
+    def select_theme(self, theme_key: str) -> None:
+        self.cfg["theme"] = theme_key
+        save_config(self.cfg)
+        self.log(f"Theme changed to {theme_key}")
+        self.apply_theme(theme_key)
+
+    def apply_theme(self, theme_key: str) -> None:
+        """Apply a theme and also refresh all texts that depend on localisation."""
+        self.current_theme = theme_key if theme_key in self.THEMES else "Mint"
+        t = self.THEMES[self.current_theme]
+
+        status_font = font.Font(family=t["font"], size=11, weight="bold")
+        button_font = font.Font(family=t["font"], size=12, weight="bold")
+        quit_font = font.Font(family=t["font"], size=10)
+        sub_font = font.Font(family=t["font"], size=10)
+        credit_font = font.Font(family=t["font"], size=8, slant="italic")
+
+        self.root.configure(bg=t["bg"])
+
+        # Aero background handling
+        if self.current_theme == "Frutiger Aero":
+            self.bubble_canvas.place(x=0, y=0, relwidth=1, relheight=1)
+            self.bubble_canvas.configure(bg=t["bg"])
+            self.bubble_canvas.lower(self.root)
+            self.init_bubbles()
+            if not self.bubble_anim_job:
+                self.animate_bubbles()
+        else:
+            if self.bubble_anim_job:
+                try:
+                    self.root.after_cancel(self.bubble_anim_job)
+                except Exception:
+                    pass
+                self.bubble_anim_job = None
+            self.bubble_canvas.place_forget()
+
+        for frame in (
+            self.top_frame,
+            self.header_controls,
+            self.center_frame,
+            self.auto_frame,
+            self.bottom_frame,
+        ):
+            frame.configure(bg=t["bg"])
+
+        self.status_label.configure(
+            font=status_font,
+            bg=t["bg"],
+            relief=t.get("status_relief", "flat"),
+            bd=t.get("status_bd", 0),
+        )
+        if self.status_text:
+            fg_color = t["conn_color"] if self.is_connected else t["unconn_color"]
+            self.status_label.configure(text=self.status_text, fg=fg_color)
+        else:
+            self.status_label.configure(fg=t["status_dim"])
+
+        btn_sec_kwargs = {
+            "font": sub_font,
+            "bg": t["btn_sec_bg"],
+            "fg": t["btn_sec_fg"],
+            "activebackground": t["btn_sec_active_bg"],
+            "activeforeground": t["btn_sec_active_fg"],
+            "relief": t["relief"],
+            "bd": max(1, t["bd"]),
+        }
+
+        # ---- Refresh all translatable texts ---------------------------------
+        self.settings_btn.configure(text=_("settings_label"))
+        self.theme_mb.configure(text="Theme ▾")
+        self.cancel_auto_btn.configure(text=_("cancel_label"))
+        self.auto_lbl.configure(text="")                     # will be set later by auto‑countdown
+        self.connect_btn.configure(
+            text=self.get_connect_text(),
+            font=button_font,
+            bg=t["btn_main_bg"],
+            fg=t["btn_main_fg"],
+            activebackground=t["btn_main_active_bg"],
+            activeforeground=t["btn_main_active_fg"],
+            relief=t["relief"],
+            bd=t["bd"],
+        )
+        self.apply_hover_effects(self.connect_btn, t["btn_main_bg"], t["btn_main_active_bg"])
+
+        self.quit_btn.configure(
+            text=_("quit_label"),
+            font=quit_font,
+            bg=t["btn_sec_bg"],
+            fg=t["btn_sec_fg"],
+            activebackground=t["btn_sec_active_bg"],
+            activeforeground=t["btn_sec_active_fg"],
+            relief=t["relief"],
+            bd=t["bd"],
+        )
+        self.apply_hover_effects(self.quit_btn, t["btn_sec_bg"], t["btn_sec_active_bg"])
+
+        self.credit_label.configure(font=credit_font, bg=t["bg"], fg=t["text"])
+
+        self.settings_btn.configure(**btn_sec_kwargs, padx=8, pady=3)
+        self.theme_mb.configure(**btn_sec_kwargs, padx=10, pady=3)
+        self.cancel_auto_btn.configure(**btn_sec_kwargs, padx=6, pady=2)
+        self.theme_menu.configure(
+            font=sub_font,
+            bg=t["btn_sec_bg"],
+            fg=t["btn_sec_fg"],
+            activebackground=t["btn_sec_active_bg"],
+            activeforeground=t["btn_sec_active_fg"],
+        )
+        self.auto_lbl.configure(font=sub_font, bg=t["bg"], fg=t["text"])
+
+    # ------------------------------------------------------------------
+    # Frutiger Aero background drawing & animation (unchanged)
+    # ------------------------------------------------------------------
+    def draw_aero_background(self) -> None:
+        if not hasattr(self, "bubble_canvas") or not hasattr(self, "aurora_phase"):
+            return
+
+        self.bubble_canvas.delete("aero_bg")
+        w = max(self.root.winfo_width(), 740)
+        h = max(self.root.winfo_height(), 400)
+
+        # sky gradient banding
+        sky_colors = ["#00325B", "#0D518A", "#1A6BB0", "#2E8AD6", "#50AAEE", "#8AD1FF"]
+        band_h = h * 0.72 / len(sky_colors)
+        for i, col in enumerate(sky_colors):
+            y1 = i * band_h
+            y2 = (i + 1) * band_h + 1
+            self.bubble_canvas.create_rectangle(0, y1, w, y2, fill=col, outline="", tags="aero_bg")
+
+        # water horizon
+        water_colors = ["#32B67A", "#18A585", "#0E838F", "#085773", "#04324B"]
+        horizon_y = h * 0.68
+        w_band_h = (h - horizon_y) / len(water_colors)
+        for i, col in enumerate(water_colors):
+            y1 = horizon_y + (i * w_band_h)
+            y2 = horizon_y + ((i + 1) * w_band_h) + 1
+            self.bubble_canvas.create_rectangle(0, y1, w, y2, fill=col, outline="", tags="aero_bg")
+
+        # aurora wave
+        sin_y = math.sin(self.aurora_phase) * 15
+        cos_y = math.cos(self.aurora_phase * 0.8) * 12
+
+        points = [
+            -20, h * 0.55 + sin_y,
+            w * 0.35, h * 0.3 + cos_y,
+            w * 0.7, h * 0.5 - sin_y,
+            w + 20, h * 0.25 + cos_y,
+            w + 20, h * 0.72,
+            -20, h * 0.72,
+        ]
+        self.bubble_canvas.create_polygon(points, fill="#3AE3FF", outline="", smooth=True, tags="aero_bg")
+
+        inner_points = [
+            -20, h * 0.5 + sin_y,
+            w * 0.4, h * 0.25 + cos_y,
+            w * 0.75, h * 0.45 - sin_y,
+            w + 20, h * 0.2 + cos_y,
+            w + 20, h * 0.62,
+            -20, h * 0.62,
+        ]
+        self.bubble_canvas.create_polygon(inner_points, fill="#A2F2FF", outline="", smooth=True, tags="aero_bg")
+
+        self.bubble_canvas.tag_lower("aero_bg")
+
+    def init_bubbles(self) -> None:
+        self.draw_aero_background()
+        self.bubble_canvas.delete("aero_obj")
+        self.bubbles = []
+        self.whimsey_orbs = []
+
+        w = max(self.root.winfo_width(), 740)
+        h = max(self.root.winfo_height(), 400)
+
+        for _ in range(15):
+            bx = random.randint(20, max(21, w - 20))
+            by = random.randint(20, h + 60)
+            br = random.randint(14, 38)
+            bspeed = random.uniform(0.7, 1.8)
+
+            b_shadow = self.bubble_canvas.create_oval(
+                bx - br - 2, by - br - 2, bx + br + 2, by + br + 2,
+                outline="#023059", width=1, fill="", tags="aero_obj",
+            )
+            b_rim = self.bubble_canvas.create_oval(
+                bx - br, by - br, bx + br, by + br,
+                outline="#FFFFFF", width=2, fill="#0B6BAA", tags="aero_obj",
+            )
+            b_inner = self.bubble_canvas.create_oval(
+                bx - br + 3, by - br + 3, bx + br - 3, by + br - 3,
+                outline="#72E3FF", width=1, fill="", tags="aero_obj",
+            )
+            b_glint1 = self.bubble_canvas.create_oval(
+                bx - br * 0.6, by - br * 0.75, bx + br * 0.2, by - br * 0.2,
+                outline="", fill="#FFFFFF", tags="aero_obj",
+            )
+            b_glint2 = self.bubble_canvas.create_oval(
+                bx - br * 0.3, by + br * 0.3, bx + br * 0.5, by + br * 0.6,
+                outline="", fill="#DDF7FF", tags="aero_obj",
+            )
+            self.bubbles.append(
+                {
+                    "shadow": b_shadow,
+                    "rim": b_rim,
+                    "inner": b_inner,
+                    "glint1": b_glint1,
+                    "glint2": b_glint2,
+                    "x": bx,
+                    "y": by,
+                    "r": br,
+                    "speed": bspeed,
+                    "drift": random.uniform(-0.6, 0.6),
+                }
+            )
+
+        for _ in range(12):
+            mx = random.randint(20, max(21, w - 20))
+            my = random.randint(10, h + 20)
+            mr = random.randint(2, 5)
+            mobj = self.bubble_canvas.create_oval(
+                mx - mr, my - mr, mx + mr, my + mr,
+                outline="", fill="#FFFFFF", tags="aero_obj",
+            )
+            self.whimsey_orbs.append(
+                {
+                    "id": mobj,
+                    "x": mx,
+                    "y": my,
+                    "r": mr,
+                    "speed": random.uniform(0.3, 0.9),
+                    "phase": random.uniform(0, math.pi * 2),
+                }
+            )
+
+    def animate_bubbles(self) -> None:
+        if not getattr(self, "running", True) or self.current_theme != "Frutiger Aero":
+            return
+
+        w = self.root.winfo_width() or 740
+        h = self.root.winfo_height() or 400
+
+        self.aurora_phase += 0.03
+        self.draw_aero_background()
+
+        for b in self.bubbles:
+            b["y"] -= b["speed"]
+            b["x"] += b["drift"] + math.sin(b["y"] * 0.02) * 0.5
+            if b["y"] + b["r"] < -10:
+                b["y"] = h + b["r"] + random.randint(10, 50)
+                b["x"] = random.randint(20, max(21, w - 20))
+
+            bx, by, br = b["x"], b["y"], b["r"]
+            self.bubble_canvas.coords(b["shadow"], bx - br - 2, by - br - 2, bx + br + 2, by + br + 2)
+            self.bubble_canvas.coords(b["rim"], bx - br, by - br, bx + br, by + br)
+            self.bubble_canvas.coords(b["inner"], bx - br + 3, by - br + 3, bx + br - 3, by + br - 3)
+            self.bubble_canvas.coords(b["glint1"], bx - br * 0.6, by - br * 0.75, bx + br * 0.2, by - br * 0.2)
+            self.bubble_canvas.coords(b["glint2"], bx - br * 0.3, by + br * 0.3, bx + br * 0.5, by + br * 0.6)
+
+        for m in self.whimsey_orbs:
+            m["y"] -= m["speed"]
+            m["phase"] += 0.06
+            m["x"] += math.sin(m["phase"]) * 0.8
+            if m["y"] < -5:
+                m["y"] = h + 15
+                m["x"] = random.randint(20, max(21, w - 20))
+            self.bubble_canvas.coords(
+                m["id"],
+                m["x"] - m["r"], m["y"] - m["r"], m["x"] + m["r"], m["y"] + m["r"],
+            )
+
+        self.bubble_anim_job = self.root.after(35, self.animate_bubbles)
+
+    # ------------------------------------------------------------------
+    # Network monitoring (unchanged apart from localisation)
+    # ------------------------------------------------------------------
+    def _check_network_once(self) -> None:
+        connected = False
+        latency_ms = None
+        proto = self.cfg.get("protocol", "http")
+
+        # ping test
+        try:
+            res = subprocess.run(
+                ["ping", "-c", "1", "-W", "2", self.cfg["ip"]],
+                capture_output=True,
+                text=True,
+                timeout=2.5,
+            )
+            if res.returncode == 0:
+                connected = True
+                match = re.search(r"time=([\d\.]+)\s*ms", res.stdout)
+                if match:
+                    latency_ms = float(match.group(1))
+        except Exception:
+            pass
+
+        # HTTP fallback
+        if not connected:
+            try:
+                url = f"{proto}://{self.cfg['ip']}"
+                req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+                ctx = ssl.create_default_context()
+                ctx.check_hostname = False
+                ctx.verify_mode = ssl.CERT_NONE
+
+                t0 = time.time()
+                with urllib.request.urlopen(req, timeout=2.0, context=ctx) as response:
+                    if response.status in (200, 301, 302, 401, 403):
+                        connected = True
+                        latency_ms = round((time.time() - t0) * 1000, 1)
+            except Exception:
+                pass
+
+        prev_connected = self.is_connected
+        self.is_connected = connected
+
+        if connected:
+            self.has_connected_once = True
+
+        # Disconnect tracking while javaws runs
+        if self.ows_process and self.ows_process.poll() is None:
+            if not connected:
+                if self.disconnect_start_time is None:
+                    self.disconnect_start_time = time.time()
+                else:
+                    elapsed = time.time() - self.disconnect_start_time
+                    if elapsed >= 10 and not self.notification_sent:
+                        send_desktop_notification(
+                            _("network_disconnected").split(":")[0],
+                            _("network_disconnected").format(ip=self.cfg["ip"]),
+                        )
+                        self.notification_sent = True
+            else:
+                self.disconnect_start_time = None
+                self.notification_sent = False
+
+        if getattr(self, "running", False):
+            t = self.THEMES.get(self.current_theme, self.THEMES["Mint"])
+            if connected:
+                lat_str = f" ({latency_ms:.1f} ms)" if latency_ms is not None else ""
+                self.status_text = _("cable_connected").format(lat=lat_str)
+                fg_color = t["conn_color"]
+                if not prev_connected:
+                    self.log(f"Connection established to {self.cfg['ip']}{lat_str}.")
+            else:
+                self.status_text = _("cable_unconnected")
+                fg_color = t["unconn_color"]
+                if prev_connected:
+                    self.log(f"Connection lost to {self.cfg['ip']}.")
+                    self.auto_cancel = False
+
+            self.root.after(
+                0,
+                lambda txt=self.status_text, fg=fg_color: self.status_label.config(
+                    text=txt, fg=fg
+                )
+                if getattr(self, "running", False)
+                else None,
+            )
+
+            if (
+                connected
+                and not prev_connected
+                and self.cfg["auto_launch"]
+                and not self.auto_cancel
+                and not self.is_launching
+            ):
+                self.root.after(0, self.start_auto_countdown)
+
+    def monitor_connection(self) -> None:
+        while getattr(self, "running", True):
+            self._check_network_once()
+            time.sleep(2.0)
+
+    # ------------------------------------------------------------------
+    # Auto‑connect countdown UI
+    # ------------------------------------------------------------------
+    def start_auto_countdown(self) -> None:
+        self.countdown_val = 3
+        self.auto_frame.pack(pady=5)
+        self.tick_countdown()
+
+    def tick_countdown(self) -> None:
+        if not self.is_connected or self.auto_cancel or self.is_launching:
+            self.auto_frame.pack_forget()
+            return
+        if self.countdown_val > 0:
+            self.auto_lbl.configure(text=_("auto_connecting_in").format(sec=self.countdown_val))
+            self.countdown_val -= 1
+            self.countdown_timer = self.root.after(1000, self.tick_countdown)
+        else:
+            self.auto_frame.pack_forget()
+            self.launch_javaws()
+
+    def cancel_auto_connect(self) -> None:
+        self.auto_cancel = True
+        if self.countdown_timer:
+            try:
+                self.root.after_cancel(self.countdown_timer)
+            except Exception:
+                pass
+            self.countdown_timer = None
+        self.auto_frame.pack_forget()
+        self.log(_("cancel_label"))
+
+    # ------------------------------------------------------------------
+    # Settings / import / export / log viewer (all translatable)
+    # ------------------------------------------------------------------
+    def open_log_viewer(self) -> None:
+        t = self.THEMES.get(self.current_theme, self.THEMES["Mint"])
+        win = tk.Toplevel(self.root)
+        win.title(_("log_window"))
+        win.configure(bg=t["bg"])
+        win.transient(self.root)
+        win.grab_set()
+
+        txt_bg = "#ffffff" if self.current_theme == "Windows 98" else "#1e1e1e"
+        txt_fg = "#000000" if self.current_theme == "Windows 98" else "#d3dae3"
+        txt_relief = "sunken" if self.current_theme in ("Windows 98", "Frutiger Aero") else "flat"
+        txt_bd = 2 if self.current_theme == "Windows 98" else 1
+
+        txt = tk.Text(
+            win,
+            bg=txt_bg,
+            fg=txt_fg,
+            font=("Monospace", 9),
+            wrap="none",
+            width=70,
+            height=18,
+            relief=txt_relief,
+            bd=txt_bd,
+        )
+        txt.pack(fill="both", expand=True, padx=12, pady=12)
+        txt.insert("1.0", "\n".join(self.logs))
+        txt.configure(state="disabled")
+
+        def close_logs():
+            try:
+                win.grab_release()
+                win.destroy()
+            except Exception:
+                pass
+
+        win.protocol("WM_DELETE_WINDOW", close_logs)
+
+        close_btn = tk.Button(
+            win,
+            text=_("close_btn"),
+            command=close_logs,
+            bg=t["btn_sec_bg"],
+            fg=t["btn_sec_fg"],
+            activebackground=t["btn_sec_active_bg"],
+            activeforeground=t["btn_sec_active_fg"],
+            relief=t["relief"],
+            bd=max(1, t["bd"]),
+            padx=12,
+            pady=4,
+            cursor="hand2",
+        )
+        close_btn.pack(pady=(0, 12))
+        self.apply_hover_effects(close_btn, t["btn_sec_bg"], t["btn_sec_active_bg"])
+
+        win.update_idletasks()
+        rx = self.root.winfo_x() + (self.root.winfo_width() // 2) - (win.winfo_width() // 2)
+        ry = self.root.winfo_y() + (self.root.winfo_height() // 2) - (win.winfo_height() // 2)
+        win.geometry(f"+{rx}+{ry}")
+
+    def export_config(self) -> None:
+        file_path = filedialog.asksaveasfilename(
+            defaultextension=".json",
+            filetypes=[("JSON Files", "*.json")],
+            title=_("export_btn"),
+        )
+        if file_path:
+            try:
+                with open(file_path, "w") as f:
+                    json.dump(self.cfg, f, indent=2)
+                messagebox.showinfo(_("export_btn"), f"{_("export_btn")}:\n{file_path}")
+            except Exception as e:
+                messagebox.showerror(_("install_failed"), str(e))
+
+    def import_config(self) -> bool:
+        file_path = filedialog.askopenfilename(
+            filetypes=[("JSON Files", "*.json")],
+            title=_("import_btn"),
+        )
+        if file_path:
+            try:
+                with open(file_path, "r") as f:
+                    imported = json.load(f)
+                if isinstance(imported, dict):
+                    self.cfg.update(imported)
+                    save_config(self.cfg)
+                    self.connect_btn.configure(text=self.get_connect_text())
+                    self.apply_theme(self.cfg.get("theme", self.current_theme))
+                    messagebox.showinfo(_("import_btn"), _("import_btn"))
+                    return True
+            except Exception as e:
+                messagebox.showerror(_("install_failed"), str(e))
+        return False
+
+    def open_settings(self) -> None:
+        t = self.THEMES.get(self.current_theme, self.THEMES["Mint"])
+        win = tk.Toplevel(self.root)
+        win.title(_("settings_window"))
+        win.configure(bg=t["bg"])
+        win.transient(self.root)
+        win.grab_set()
+
+        old_cfg = self.cfg.copy()
+        lbl_font = font.Font(family=t["font"], size=10, weight="bold")
+        entry_font = font.Font(family=t["font"], size=10)
+
+        proto_var = tk.StringVar(value=self.cfg.get("protocol", "http"))
+        ip_var = tk.StringVar(value=self.cfg.get("ip", "192.168.1.200"))
+        jnlp_var = tk.StringVar(value=self.cfg.get("jnlp", "admin.jnlp"))
+        auto_var = tk.BooleanVar(value=self.cfg.get("auto_launch", False))
+        lang_var = tk.StringVar(value=self.cfg.get("lang", "en"))
+
+        def update_live_preview(*_):
+            self.cfg["protocol"] = proto_var.get()
+            self.cfg["ip"] = ip_var.get().strip() or "192.168.1.200"
+            self.cfg["jnlp"] = jnlp_var.get().strip() or "admin.jnlp"
+            self.cfg["lang"] = lang_var.get()
+            if not self.is_launching:
+                self.connect_btn.configure(text=self.get_connect_text())
+                # also update other UI texts that depend on language
+                self.settings_btn.configure(text=_("settings_label"))
+                self.quit_btn.configure(text=_("quit_label"))
+                self.cancel_auto_btn.configure(text=_("cancel_label"))
+                self.auto_lbl.configure(text="")  # will be refreshed when auto‑connect starts
+
+        proto_var.trace_add("write", update_live_preview)
+        ip_var.trace_add("write", update_live_preview)
+        jnlp_var.trace_add("write", update_live_preview)
+        lang_var.trace_add("write", update_live_preview)
+
+        entry_relief = "sunken" if self.current_theme in ("Windows 98", "Frutiger Aero") else "flat"
+        entry_bd = 2 if self.current_theme == "Windows 98" else 1
+
+        ttk_style = ttk.Style()
+        ttk_style.configure("TLabel", background=t["bg"], foreground=t["text"], font=lbl_font)
+        ttk_style.configure("TEntry", font=entry_font)
+
+        row = 0
+        ttk.Label(win, text=_("protocol_label")).grid(row=row, column=0, sticky="e", padx=10, pady=8)
+        proto_frame = ttk.Frame(win)
+        proto_frame.grid(row=row, column=1, sticky="w", padx=10, pady=8)
+        ttk.Radiobutton(proto_frame, text=_("protocol_http"), variable=proto_var, value="http").pack(side="left", padx=5)
+        ttk.Radiobutton(proto_frame, text=_("protocol_https"), variable=proto_var, value="https").pack(side="left", padx=5)
+
+        row += 1
+        ttk.Label(win, text=_("ip_label")).grid(row=row, column=0, sticky="e", padx=10, pady=8)
+        ttk.Entry(win, textvariable=ip_var, width=30).grid(row=row, column=1, sticky="w", padx=10, pady=8)
+
+        row += 1
+        ttk.Label(win, text=_("jnlp_label")).grid(row=row, column=0, sticky="e", padx=10, pady=8)
+        ttk.Entry(win, textvariable=jnlp_var, width=30).grid(row=row, column=1, sticky="w", padx=10, pady=8)
+
+        row += 1
+        ttk.Checkbutton(
+            win,
+            text=_("auto_launch_label"),
+            variable=auto_var,
+        ).grid(row=row, column=0, columnspan=2, sticky="w", padx=10, pady=8)
+
+        row += 1
+        ttk.Label(win, text=_("language_label")).grid(row=row, column=0, sticky="e", padx=10, pady=8)
+        lang_combo = ttk.Combobox(win, state="readonly", values=list(_LANG_CODES.values()))
+        code_to_name = {code: name for code, name in _LANG_CODES.items()}
+        lang_combo.set(code_to_name.get(self.cfg.get("lang", "en"), "English"))
+        lang_combo.grid(row=row, column=1, sticky="w", padx=10, pady=8)
+
+        def on_lang_selected(event):
+            selected_name = lang_combo.get()
+            selected_code = {v: k for k, v in _LANG_CODES.items()}.get(selected_name, "en")
+            lang_var.set(selected_code)
+
+        lang_combo.bind("<<ComboboxSelected>>", on_lang_selected)
+
+        row += 1
+        tools_frame = ttk.Frame(win)
+        tools_frame.grid(row=row, column=0, columnspan=2, pady=12, padx=10, sticky="ew")
+        ttk.Button(tools_frame, text=_("import_btn"), command=self.import_config, style="Small.TButton").pack(side="left", padx=5)
+        ttk.Button(tools_frame, text=_("export_btn"), command=self.export_config, style="Small.TButton").pack(side="left", padx=5)
+        ttk.Button(tools_frame, text=_("view_logs_btn"), command=self.open_log_viewer, style="Small.TButton").pack(side="right", padx=5)
+
+        def save_and_close():
+            self.cfg["auto_launch"] = auto_var.get()
+            self.cfg["lang"] = lang_var.get()
+            self.auto_cancel = False
+            save_config(self.cfg)
+            # Refresh the whole launcher UI with the new language
+            self.apply_theme(self.cfg.get("theme", self.current_theme))
+            win.grab_release()
+            win.destroy()
+
+        def cancel_and_close():
+            self.cfg = old_cfg
+            if not self.is_launching:
+                self.connect_btn.configure(text=self.get_connect_text())
+            win.grab_release()
+            win.destroy()
+
+        win.protocol("WM_DELETE_WINDOW", cancel_and_close)
+
+        row += 1
+        btn_frame = ttk.Frame(win)
+        btn_frame.grid(row=row, column=0, columnspan=2, pady=(5, 15))
+        ttk.Button(btn_frame, text=_("save_btn"), width=10, command=save_and_close, style="Small.TButton").pack(side="left", padx=8)
+        ttk.Button(btn_frame, text=_("cancel_btn"), width=10, command=cancel_and_close, style="Small.TButton").pack(side="left", padx=8)
+
+        win.update_idletasks()
+        rx = self.root.winfo_x() + (self.root.winfo_width() // 2) - (win.winfo_width() // 2)
+        ry = self.root.winfo_y() + (self.root.winfo_height() // 2) - (win.winfo_height() // 2)
+        win.geometry(f"+{rx}+{ry}")
+
+    # ------------------------------------------------------------------
+    # Java WebStart launch handling
+    # ------------------------------------------------------------------
+    def _watch_ows_lifecycle(self) -> None:
+        if self.ows_process:
+            self.ows_process.wait()
+        self.root.after(0, self.on_close)
+
+    def launch_javaws(self) -> None:
+        if self.is_launching:
+            return
+
+        self.is_launching = True
+        self.cancel_auto_connect()
+        self.connect_btn.configure(text=_("launching_msg"), state="disabled")
+        self.root.update_idletasks()
+
+        javaws_bin = shutil.which("javaws") or "javaws"
+        target_url = self.get_target_url()
+        self.log(f"Launching Java WebStart target: {target_url}")
+
+        try:
+            self.ows_process = subprocess.Popen(
+                [javaws_bin, target_url],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            self.root.withdraw()
+            threading.Thread(target=self._watch_ows_lifecycle, daemon=True).start()
+        except Exception as e:
+            self.is_launching = False
+            self.log(f"Launch failed: {str(e)}")
+            self.root.deiconify()
+            self.connect_btn.configure(text=self.get_connect_text(), state="normal")
+            self.apply_theme(self.current_theme)
+            messagebox.showerror(_("launch_error").split(":")[0], _("launch_error").format(err=str(e)))
+
+    # ------------------------------------------------------------------
+    # Clean shutdown
+    # ------------------------------------------------------------------
+    def on_close(self) -> None:
+        self.running = False
+
+        if self.bubble_anim_job:
+            try:
+                self.root.after_cancel(self.bubble_anim_job)
+            except Exception:
+                pass
+            self.bubble_anim_job = None
+
+        if self.countdown_timer:
+            try:
+                self.root.after_cancel(self.countdown_timer)
+            except Exception:
+                pass
+            self.countdown_timer = None
+
+        try:
+            self.root.destroy()
+        except Exception:
+            pass
+        sys.exit(0)
+
+
+# ----------------------------------------------------------------------
+# Entry‑point
+# ----------------------------------------------------------------------
+if __name__ == "__main__":
+    # ------------------------------------------------------------------
+    # Verify prerequisites – if missing, launch the installer.
+    # ------------------------------------------------------------------
+    if not check_prerequisites():
+        run_prerequisite_installer()
+        sys.exit(0)
+
+    # ------------------------------------------------------------------
+    # All good – start the main launcher immediately (no splash, no sound).
+    # ------------------------------------------------------------------
+    root = tk.Tk()
+    set_ui_scaling(root)                # ensure proper DPI scaling before UI creation
+    app = SplashScreen(root)
+    root.mainloop()

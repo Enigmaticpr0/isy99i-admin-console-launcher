@@ -1,0 +1,9 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Admin Console
+Comment=Launch Admin JNLP Console
+Exec=/usr/local/bin/admin-console
+Icon=admin-console
+Terminal=false
+Categories=Utility;
