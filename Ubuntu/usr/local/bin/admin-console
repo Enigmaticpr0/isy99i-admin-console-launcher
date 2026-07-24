@@ -9,18 +9,19 @@ Fixes added (as requested)
 * **DPI‑aware scaling with a sensible ceiling** – on 4 K monitors the UI is
   still proportional but never becomes absurdly large.  The scaling factor
   is capped at 1.5 and the base font size is limited to a maximum of 14 pt.
-* **Installer language switch no longer shrinks the window** – the current
-  geometry is saved, the UI is rebuilt, then the saved geometry is restored.
-* **Launcher UI text is fully refreshed after a language change** – all
-  labels, buttons and menus now display the newly‑selected language.
-* **Settings‑menu buttons are rendered with a smaller, consistent style** –
-  a custom ttk style (“Small.TButton”) is used so the buttons look
-  proportional on Hi‑DPI screens.
-* The original splash screen and bell sound have been removed (the program
-  now goes straight to the launcher after the prerequisite check).
-
-All other functionality (network monitoring, auto‑connect, themes, log
-viewer, etc.) remains unchanged apart from the localisation hooks.
+* **Installer language switch now requires a restart** – when the user picks a
+  different language the configuration is saved, a short “restart‑required”
+  message is shown and the installer exits.  On the next launch the UI is
+  automatically displayed in the selected language.
+* **Console‑settings language change no longer raises a TypeError** – the
+  callback that updates the live preview now uses a different argument name
+  (`*_args`) so the global translation function ``_`` is not shadowed.
+* **All Settings‑window buttons (Import, Export, View Logs, “Logs Folder”) are
+  functional** and the state of every setting is persisted to a single
+  configuration file (`~/.admin-console-launcher/config/config.json`).
+* **Log‑viewer now contains a “Keep Session Logs” control** (moved from the
+  settings dialog) and respects the user‑defined retention count.
+* **Credit label updated** – shows “EnigmaticPr0 Software 2026”.
 """
 
 import os
@@ -40,9 +41,17 @@ import webbrowser
 import tkinter as tk
 from tkinter import font, messagebox, filedialog, ttk
 
-# ----------------------------------------------------------------------
-# Translation data -------------------------------------------------------
-# ----------------------------------------------------------------------
+# Base directories for configuration, logs, and temporary files
+BASE_DIR = os.path.expanduser("~/.admin-console-launcher")
+CONFIG_DIR = os.path.join(BASE_DIR, "config")
+CONFIG_FILE = os.path.join(CONFIG_DIR, "config.json")
+LOGS_DIR = os.path.join(BASE_DIR, "logs")
+TMP_DIR = os.path.join(BASE_DIR, "tmp")
+
+for _d in (CONFIG_DIR, LOGS_DIR, TMP_DIR):
+    os.makedirs(_d, exist_ok=True)
+
+# Language codes and translation tables
 _LANG_CODES = {
     "en": "English",
     "es": "Español",
@@ -55,9 +64,7 @@ _LANG_CODES = {
 }
 
 _TRANSLATIONS = {
-    # ------------------------------------------------------------------
-    # English (default) – the keys are the same for all languages
-    # ------------------------------------------------------------------
+    # English (default) – keys are identical across languages
     "en": {
         # Installer
         "installer_title": "Missing Prerequisites",
@@ -77,6 +84,7 @@ _TRANSLATIONS = {
         "install_failed": "Installation Failed",
         "download_failed": "Download Failed",
         "language_label": "Language:",
+        "restart_required": "Please restart the Admin Console to apply the language change.",
         # Main UI
         "connect_label": "Connect to {url}",
         "quit_label": "Quit",
@@ -106,9 +114,7 @@ _TRANSLATIONS = {
         "yes": "Yes",
         "no": "No",
     },
-    # ------------------------------------------------------------------
-    # Spanish
-    # ------------------------------------------------------------------
+    # Spanish (fallback to English for missing keys)
     "es": {
         "installer_title": "Requisitos Faltantes",
         "installer_intro": "La Consola de Administrador necesita los siguientes componentes:",
@@ -127,6 +133,7 @@ _TRANSLATIONS = {
         "install_failed": "Instalación Fallida",
         "download_failed": "Descarga Fallida",
         "language_label": "Idioma:",
+        "restart_required": "Por favor reinicie la Consola de Administrador para aplicar el cambio de idioma.",
         "connect_label": "Conectar a {url}",
         "quit_label": "Salir",
         "settings_label": "⚙ Configuración",
@@ -155,9 +162,7 @@ _TRANSLATIONS = {
         "yes": "Sí",
         "no": "No",
     },
-    # ------------------------------------------------------------------
-    # Russian
-    # ------------------------------------------------------------------
+    # Russian (fallback to English for missing keys)
     "ru": {
         "installer_title": "Отсутствуют Требования",
         "installer_intro": "Консоль Администратора требует следующие компоненты:",
@@ -176,6 +181,7 @@ _TRANSLATIONS = {
         "install_failed": "Ошибка Установки",
         "download_failed": "Ошибка Скачивания",
         "language_label": "Язык:",
+        "restart_required": "Перезапустите Консоль Администратора, чтобы применить язык.",
         "connect_label": "Подключиться к {url}",
         "quit_label": "Выход",
         "settings_label": "⚙ Настройки",
@@ -204,9 +210,7 @@ _TRANSLATIONS = {
         "yes": "Да",
         "no": "Нет",
     },
-    # ------------------------------------------------------------------
-    # Lithuanian
-    # ------------------------------------------------------------------
+    # Lithuanian (fallback to English for missing keys)
     "lt": {
         "installer_title": "Trūksta Priklausomybių",
         "installer_intro": "Administratoriaus konsolė reikalauja šių komponentų:",
@@ -225,13 +229,14 @@ _TRANSLATIONS = {
         "install_failed": "Įdiegimo Klaida",
         "download_failed": "Atsisiuntimo Klaida",
         "language_label": "Kalba:",
+        "restart_required": "Paleiskite programą iš naujo, kad įsigaliotų kalbos pakeitimas.",
         "connect_label": "Prisijungti prie {url}",
         "quit_label": "Išeiti",
         "settings_label": "⚙ Nustatymai",
         "cancel_label": "Atšaukti Auto‑Prisijungimą",
         "auto_connecting_in": "Auto‑prisijungimas po {sec}s…",
         "launching_msg": "Paleidžiama Java WebStart…",
-        "launch_error": "Nepavyko paleisti Java WebStart:\n\n{err}\n\nĮsitikinkite, kad OpenWebStart yra įdiegtas.",
+        "launch_error": "Nebuvo įmanoma paleisti Java WebStart:\n\n{err}\n\nĮsitikinkite, kad OpenWebStart yra įdiegtas.",
         "cable_connected": "Kabelis Prijungtas{lat}",
         "cable_unconnected": "Kabelis Atjungtas",
         "network_disconnected": "Kabelis atjungtas nuo {ip} daugiau nei 10 s kol veikia javaws!",
@@ -253,9 +258,7 @@ _TRANSLATIONS = {
         "yes": "TAIP",
         "no": "NE",
     },
-    # ------------------------------------------------------------------
-    # Ukrainian
-    # ------------------------------------------------------------------
+    # Ukrainian (fallback to English for missing keys)
     "uk": {
         "installer_title": "Відсутні Передумови",
         "installer_intro": "Консоль Адміністратора потребує наступних компонентів:",
@@ -274,6 +277,7 @@ _TRANSLATIONS = {
         "install_failed": "Помилка Встановлення",
         "download_failed": "Помилка Завантаження",
         "language_label": "Мова:",
+        "restart_required": "Будь ласка, перезапустіть консоль, щоб застосувати мову.",
         "connect_label": "Підключитися до {url}",
         "quit_label": "Вихід",
         "settings_label": "⚙ Налаштування",
@@ -302,9 +306,7 @@ _TRANSLATIONS = {
         "yes": "Так",
         "no": "Ні",
     },
-    # ------------------------------------------------------------------
-    # Chinese (Simplified)
-    # ------------------------------------------------------------------
+    # Chinese (Simplified) (fallback to English for missing keys)
     "zh": {
         "installer_title": "缺少先决条件",
         "installer_intro": "管理控制台需要以下组件：",
@@ -323,6 +325,7 @@ _TRANSLATIONS = {
         "install_failed": "安装失败",
         "download_failed": "下载失败",
         "language_label": "语言：",
+        "restart_required": "请重新启动管理控制台以应用语言更改。",
         "connect_label": "连接到 {url}",
         "quit_label": "退出",
         "settings_label": "⚙ 设置",
@@ -351,9 +354,7 @@ _TRANSLATIONS = {
         "yes": "是",
         "no": "否",
     },
-    # ------------------------------------------------------------------
-    # French
-    # ------------------------------------------------------------------
+    # French (fallback to English for missing keys)
     "fr": {
         "installer_title": "Pré-requis Manquants",
         "installer_intro": "La console d'administration nécessite les composants suivants :",
@@ -372,6 +373,7 @@ _TRANSLATIONS = {
         "install_failed": "Échec de l'Installation",
         "download_failed": "Échec du Téléchargement",
         "language_label": "Langue :",
+        "restart_required": "Veuillez redémarrer la console d'administration pour appliquer la langue.",
         "connect_label": "Se connecter à {url}",
         "quit_label": "Quitter",
         "settings_label": "⚙ Paramètres",
@@ -400,9 +402,7 @@ _TRANSLATIONS = {
         "yes": "Oui",
         "no": "Non",
     },
-    # ------------------------------------------------------------------
-    # German
-    # ------------------------------------------------------------------
+    # German (fallback to English for missing keys)
     "de": {
         "installer_title": "Fehlende Voraussetzungen",
         "installer_intro": "Die Admin‑Konsole benötigt folgende Komponenten:",
@@ -421,6 +421,7 @@ _TRANSLATIONS = {
         "install_failed": "Installation fehlgeschlagen",
         "download_failed": "Download fehlgeschlagen",
         "language_label": "Sprache:",
+        "restart_required": "Bitte starten Sie die Admin‑Konsole neu, um die Sprache zu übernehmen.",
         "connect_label": "Verbinden mit {url}",
         "quit_label": "Beenden",
         "settings_label": "⚙ Einstellungen",
@@ -451,7 +452,6 @@ _TRANSLATIONS = {
     },
 }
 
-
 def _(key: str, **fmt) -> str:
     """Return the translation for *key* in the current language."""
     cfg = load_config()
@@ -465,13 +465,7 @@ def _(key: str, **fmt) -> str:
     return txt
 
 
-# ----------------------------------------------------------------------
-# Configuration & storage paths
-# ----------------------------------------------------------------------
-CONFIG_DIR = os.path.expanduser("~/.config/admin_console")
-CONFIG_FILE = os.path.join(CONFIG_DIR, "config.json")
-
-
+# Load configuration (defaults merged with file data)
 def load_config() -> dict:
     cfg = {
         "theme": "Frutiger Aero",
@@ -480,6 +474,7 @@ def load_config() -> dict:
         "jnlp": "admin.jnlp",
         "auto_launch": False,
         "lang": "en",
+        "keep_logs": 10,
     }
     if os.path.exists(CONFIG_FILE):
         try:
@@ -493,9 +488,14 @@ def load_config() -> dict:
         cfg["protocol"] = "http"
     if cfg.get("lang") not in _LANG_CODES:
         cfg["lang"] = "en"
+    try:
+        cfg["keep_logs"] = max(1, int(cfg.get("keep_logs", 10)))
+    except Exception:
+        cfg["keep_logs"] = 10
     return cfg
 
 
+# Save configuration to file
 def save_config(cfg: dict) -> None:
     try:
         os.makedirs(CONFIG_DIR, exist_ok=True)
@@ -505,6 +505,7 @@ def save_config(cfg: dict) -> None:
         pass
 
 
+# Send desktop notification (Linux only)
 def send_desktop_notification(title: str, message: str) -> None:
     try:
         subprocess.Popen(
@@ -516,9 +517,7 @@ def send_desktop_notification(title: str, message: str) -> None:
         pass
 
 
-# ----------------------------------------------------------------------
-# Prerequisite detection helpers
-# ----------------------------------------------------------------------
+# Return Java version string or None
 def _java_version_output() -> str | None:
     java_bin = shutil.which("java")
     if not java_bin:
@@ -536,6 +535,7 @@ def _java_version_output() -> str | None:
         return None
 
 
+# Detect Java 8 presence
 def _has_java8() -> bool:
     out = _java_version_output()
     if not out:
@@ -544,6 +544,7 @@ def _has_java8() -> bool:
     return ("1.8.0" in out) or re.search(r"\b8\.\d", out) is not None
 
 
+# Detect OpenWebStart package presence
 def _has_openwebstart_pkg() -> bool:
     try:
         result = subprocess.run(
@@ -558,22 +559,23 @@ def _has_openwebstart_pkg() -> bool:
         return False
 
 
+# True if both prerequisites are satisfied
 def check_prerequisites() -> bool:
     return _has_java8() and _has_openwebstart_pkg()
 
 
-# ----------------------------------------------------------------------
-# Helper functions for installing OpenWebStart (download latest .deb from GitHub)
-# ----------------------------------------------------------------------
+# GitHub API URL for latest OpenWebStart release
 GITHUB_API_LATEST = (
     "https://api.github.com/repos/karakun/OpenWebStart/releases/latest"
 )
+# Fallback .deb URL if API fails
 FALLBACK_DEB_URL = (
     "https://github.com/karakun/OpenWebStart/releases/download/v1.14.0/"
     "OpenWebStart_linux_1_14_0.deb"
 )
 
 
+# Download latest OpenWebStart .deb to *dest_path*
 def _download_latest_ows_deb(dest_path: str) -> str:
     try:
         with urllib.request.urlopen(GITHUB_API_LATEST, timeout=10) as resp:
@@ -588,14 +590,13 @@ def _download_latest_ows_deb(dest_path: str) -> str:
     except Exception:
         download_url = FALLBACK_DEB_URL
 
-    with urllib.request.urlopen(download_url, timeout=30) as resp, open(
-        dest_path, "wb"
-    ) as out_f:
+    with urllib.request.urlopen(download_url, timeout=30) as resp, open(dest_path, "wb") as out_f:
         shutil.copyfileobj(resp, out_f)
 
     return dest_path
 
 
+# Run a command via pkexec, return (rc, stdout, stderr)
 def _run_pkexec(cmd: list[str]) -> tuple[int, str, str]:
     full_cmd = ["pkexec"] + cmd
     try:
@@ -610,6 +611,7 @@ def _run_pkexec(cmd: list[str]) -> tuple[int, str, str]:
         return 1, "", str(e)
 
 
+# Install a .deb file using pkexec
 def _install_deb_via_pkexec(deb_path: str) -> None:
     ret, out, err = _run_pkexec(["dpkg", "-i", deb_path])
     if ret != 0:
@@ -620,47 +622,53 @@ def _install_deb_via_pkexec(deb_path: str) -> None:
         raise RuntimeError(f"apt‑get -f install failed:\n{out}\n{err}")
 
 
-# ----------------------------------------------------------------------
-# DPI‑aware scaling helper (capped at 1.5×, max font 14pt)
-# ----------------------------------------------------------------------
+# Detect screen DPI, set Tk scaling (max 1.5) and return factor
 def set_ui_scaling(root: tk.Tk) -> float:
-    """
-    Detect screen DPI, set Tk scaling factor (capped at 1.5), and return it.
-    The returned factor is later used to compute a proportional base font
-    size (max 14 pt) so UI elements never become monstrous on 4 K screens.
-    """
     try:
         pixels_per_inch = root.winfo_fpixels("1i")
-        scaling = pixels_per_inch / 96.0          # 96 dpi → scaling 1.0
-        scaling = min(scaling, 1.5)               # ceiling
+        scaling = pixels_per_inch / 96.0
+        scaling = min(scaling, 1.5)
         root.tk.call("tk", "scaling", scaling)
         return scaling
     except Exception:
         return 1.0
 
 
+# Compute base font size from scaling (9 pt – 14 pt)
 def base_font_size(scaling: float) -> int:
-    """
-    Compute a reasonable base font size from the scaling factor.
-    Minimum 9 pt, maximum 14 pt – this keeps UI readable without becoming
-    oversized on high‑resolution displays.
-    """
     size = int(10 * scaling)
-    if size < 9:
-        size = 9
-    if size > 14:
-        size = 14
+    size = max(9, min(size, 14))
     return size
 
 
-# ----------------------------------------------------------------------
-# Installer wizard (language selector works correctly, UI is DPI‑aware)
-# ----------------------------------------------------------------------
+# Show a centered dialog with *title*, *message*, and an OK button
+def _show_install_complete_dialog(parent: tk.Tk, title: str,
+                                message: str, width: int, height: int) -> None:
+    dlg = tk.Toplevel(parent)
+    dlg.title(title)
+    dlg.resizable(False, False)
+
+    dlg.geometry(f"{width}x{height}")
+
+    dlg.update_idletasks()
+    x = (dlg.winfo_screenwidth() // 2) - (width // 2)
+    y = (dlg.winfo_screenheight() // 2) - (height // 2)
+    dlg.geometry(f"+{x}+{y}")
+
+    msg = tk.Message(dlg, text=message, width=width - 40, justify="center")
+    msg.pack(expand=True, fill="both", padx=20, pady=20)
+
+    btn = ttk.Button(dlg, text=_("ok"), command=dlg.destroy, width=12)
+    btn.pack(pady=(0, 15))
+    btn.focus_set()
+
+    dlg.transient(parent)
+    dlg.grab_set()
+    dlg.wait_window()
+
+
+# Installer UI (language change forces restart)
 def run_prerequisite_installer() -> None:
-    """
-    Modal wizard that installs missing Java 8 / OpenWebStart.
-    The whole UI is rebuilt whenever the language changes.
-    """
     cfg = load_config()
     missing_java = not _has_java8()
     missing_ows = not _has_openwebstart_pkg()
@@ -671,14 +679,10 @@ def run_prerequisite_installer() -> None:
     if missing_ows:
         missing_parts.append(_("ows_missing"))
 
-    # --------------------------------------------------------------
-    # Helper: build the entire installer UI inside *container* (a Frame)
-    # --------------------------------------------------------------
+    # Build installer UI inside *container*
     def build_ui(container: tk.Tk):
-        # Preserve window geometry across rebuilds
         saved_geom = container.winfo_geometry()
 
-        # clear everything first
         for child in container.winfo_children():
             child.destroy()
 
@@ -688,7 +692,6 @@ def run_prerequisite_installer() -> None:
         style = ttk.Style()
         style.theme_use("clam")
 
-        # ttk fonts
         default_font = font.nametofont("TkDefaultFont")
         default_font.configure(size=fsize)
         style.configure(
@@ -697,19 +700,9 @@ def run_prerequisite_installer() -> None:
             foreground="#000000",
             font=(default_font.cget("family"), fsize),
         )
-        style.configure(
-            "TButton",
-            font=(default_font.cget("family"), fsize),
-        )
-        style.configure(
-            "TEntry",
-            font=(default_font.cget("family"), fsize),
-        )
-        style.configure(
-            "TCombobox",
-            font=(default_font.cget("family"), fsize),
-        )
-        # Smaller button style for the Settings dialog (used later)
+        style.configure("TButton", font=(default_font.cget("family"), fsize))
+        style.configure("TEntry", font=(default_font.cget("family"), fsize))
+        style.configure("TCombobox", font=(default_font.cget("family"), fsize))
         style.configure(
             "Small.TButton",
             font=(default_font.cget("family"), max(fsize - 2, 9)),
@@ -720,13 +713,13 @@ def run_prerequisite_installer() -> None:
             background=[("active", "#e0e0e0")],
         )
 
-        # --------------------------------------------------------------
-        # Language selector (top row)
-        # --------------------------------------------------------------
-        lang_var = tk.StringVar(value=cfg.get("lang", "en"))
-
-        ttk.Label(container, text=_("language_label")).grid(row=0, column=0, sticky="e", padx=10, pady=5)
-        lang_combo = ttk.Combobox(container, state="readonly", values=list(_LANG_CODES.values()))
+        # Language selector – saves selection and exits
+        ttk.Label(container, text=_("language_label")).grid(
+            row=0, column=0, sticky="e", padx=10, pady=5
+        )
+        lang_combo = ttk.Combobox(
+            container, state="readonly", values=list(_LANG_CODES.values())
+        )
         code_to_name = {code: name for code, name in _LANG_CODES.items()}
         name_to_code = {v: k for k, v in code_to_name.items()}
         lang_combo.set(code_to_name.get(cfg.get("lang", "en"), "English"))
@@ -737,15 +730,13 @@ def run_prerequisite_installer() -> None:
             selected_code = name_to_code.get(selected_name, "en")
             cfg["lang"] = selected_code
             save_config(cfg)
-            # Re‑build UI with the new language, then restore geometry
-            build_ui(container)
-            container.geometry(saved_geom)
+            messagebox.showinfo(_("installer_title"), _("restart_required"))
+            container.destroy()
+            sys.exit(0)
 
         lang_combo.bind("<<ComboboxSelected>>", on_language_change)
 
-        # --------------------------------------------------------------
-        # Main installer content (below language selector)
-        # --------------------------------------------------------------
+        # Installer description and missing components
         intro = ttk.Label(
             container,
             text=_("installer_intro"),
@@ -765,9 +756,7 @@ def run_prerequisite_installer() -> None:
                 font=(default_font.cget("family"), fsize),
             ).pack(anchor="w", pady=2)
 
-        # --------------------------------------------------------------
-        # Action buttons row
-        # --------------------------------------------------------------
+        # Action buttons
         action_frame = ttk.Frame(container)
         action_frame.grid(row=3, column=0, columnspan=2, pady=15, sticky="ew", padx=20)
 
@@ -787,13 +776,13 @@ def run_prerequisite_installer() -> None:
             container.after(0, lambda: callback(*args, **kwargs))
 
         def show_info_then_quit(title: str, message: str):
-            messagebox.showinfo(title, message)
+            width = container.winfo_width()
+            height = container.winfo_height()
+            _show_install_complete_dialog(container, title, message, width, height)
             container.destroy()
             sys.exit(0)
 
-        # --------------------------------------------------------------
-        # Installation threads (language‑aware messages)
-        # --------------------------------------------------------------
+        # Java installation thread
         def install_java_thread():
             ui_call(status_var.set, _("installing_java"))
             ui_call(progress.grid, row=4, column=0, columnspan=2, padx=20, pady=5, sticky="ew")
@@ -813,13 +802,14 @@ def run_prerequisite_installer() -> None:
                 ui_call(messagebox.showerror, _("install_failed"), f"{out}\n{err}")
                 ui_call(enable_buttons)
 
+        # OpenWebStart installation thread
         def install_ows_thread():
             ui_call(status_var.set, _("installing_ows"))
             ui_call(progress.grid, row=4, column=0, columnspan=2, padx=20, pady=5, sticky="ew")
             ui_call(progress.start)
 
             try:
-                deb_path = f"/tmp/OpenWebStart_latest_{int(time.time())}.deb"
+                deb_path = os.path.join(TMP_DIR, f"OpenWebStart_latest_{int(time.time())}.deb")
                 _download_latest_ows_deb(deb_path)
             except Exception as e:
                 ui_call(progress.stop)
@@ -838,16 +828,23 @@ def run_prerequisite_installer() -> None:
                 ui_call(status_label.grid_remove)
                 ui_call(messagebox.showerror, _("install_failed"), str(e))
                 ui_call(enable_buttons)
+                try:
+                    os.remove(deb_path)
+                except Exception:
+                    pass
                 return
+
+            try:
+                os.remove(deb_path)
+            except Exception:
+                pass
 
             ui_call(progress.stop)
             ui_call(progress.grid_remove)
             ui_call(status_label.grid_remove)
             ui_call(show_info_then_quit, _("install_complete_ows"), _("install_complete_ows"))
 
-        # --------------------------------------------------------------
-        # Buttons (only for missing components)
-        # --------------------------------------------------------------
+        # Buttons for missing components
         if missing_java:
             container.btn_java = ttk.Button(
                 action_frame,
@@ -910,22 +907,25 @@ def run_prerequisite_installer() -> None:
         for i in range(7):
             container.rowconfigure(i, weight=1)
 
-    # ------------------------------------------------------------------
-    # Create the root window and start the UI
-    # ------------------------------------------------------------------
+    # Create installer window
     root = tk.Tk()
     root.title(_("installer_title"))
     root.resizable(True, True)
-    root.configure(bg="#f0f0f0")          # light neutral background
+    root.configure(bg="#f0f0f0")
 
     build_ui(root)
+
+    root.update_idletasks()
+    w = root.winfo_width()
+    h = root.winfo_height()
+    x = (root.winfo_screenwidth() // 2) - (w // 2)
+    y = (root.winfo_screenheight() // 2) - (h // 2)
+    root.geometry(f"+{x}+{y}")
 
     root.mainloop()
 
 
-# ----------------------------------------------------------------------
-# Main Application GUI Class (unchanged apart from localisation)
-# ----------------------------------------------------------------------
+# Main launcher UI
 class SplashScreen:
     """Tkinter based launcher UI."""
 
@@ -935,17 +935,18 @@ class SplashScreen:
         self.root.minsize(740, 400)
         self.root.resizable(True, True)
 
-        # --------------------------------------------------------------
-        # Scaling – keep UI proportional on Hi‑DPI displays
-        # --------------------------------------------------------------
+        # Apply DPI scaling before creating widgets
         scaling = set_ui_scaling(self.root)
         fsize = base_font_size(scaling)
         default_font = font.nametofont("TkDefaultFont")
         default_font.configure(size=fsize)
 
         self.cfg = load_config()
-        self.logs = []
+        self.logs = []                     # in‑memory log buffer
+        self.session_log_path = os.path.join(LOGS_DIR, f"session_{int(time.time())}.log")
+        self.session_log_file = open(self.session_log_path, "a", encoding="utf-8")
         self.log("Application started.")
+        self._enforce_log_retention()
 
         self.is_connected = False
         self.status_text = None
@@ -965,9 +966,7 @@ class SplashScreen:
         self.aurora_phase = 0.0
         self.bubble_anim_job = None
 
-        # --------------------------------------------------------------
-        # Theme definitions (same as original)
-        # --------------------------------------------------------------
+        # Theme definitions
         self.THEMES = {
             "Mint": {
                 "name": "Mint",
@@ -1096,22 +1095,25 @@ class SplashScreen:
             },
         }
 
-        # Resolve theme key from config (fallback to Mint)
+        # Resolve theme from configuration
         self.current_theme = "Mint"
         for key, theme in self.THEMES.items():
             if self.cfg.get("theme") in (key, theme.get("name")):
                 self.current_theme = key
                 break
 
-        # --------------------------------------------------------------
-        # Layout construction (all classic Tk widgets – sizes already scaled)
-        # --------------------------------------------------------------
+        # Build UI layout
         self.top_frame = tk.Frame(self.root)
         self.top_frame.pack(fill="x", padx=30, pady=(25, 10))
         self.top_frame.columnconfigure(0, weight=1)
         self.top_frame.columnconfigure(1, weight=1)
 
-        self.status_label = tk.Label(self.top_frame, text=_("cable_unconnected"), padx=6, pady=2)
+        self.status_label = tk.Label(
+            self.top_frame,
+            text=_("cable_unconnected"),
+            padx=6,
+            pady=2,
+        )
         self.status_label.grid(row=0, column=0, sticky="w")
 
         self.header_controls = tk.Frame(self.top_frame)
@@ -1151,7 +1153,6 @@ class SplashScreen:
         )
         self.connect_btn.pack(expand=True)
 
-        # Auto‑connect UI
         self.auto_frame = tk.Frame(self.center_frame)
         self.auto_lbl = tk.Label(self.auto_frame, text="")
         self.auto_lbl.pack(side="left", padx=5)
@@ -1163,10 +1164,9 @@ class SplashScreen:
         self.bottom_frame = tk.Frame(self.root)
         self.bottom_frame.pack(fill="x", padx=30, pady=(10, 25))
 
-        # Credit label (bottom‑left)
         self.credit_label = tk.Label(
             self.bottom_frame,
-            text="ProEnigmatic Software 2026",
+            text="EnigmaticPr0 Software 2026",
             font=("DejaVu Sans", 8, "italic"),
         )
         self.credit_label.pack(side="left")
@@ -1181,7 +1181,7 @@ class SplashScreen:
         )
         self.quit_btn.pack(side="right")
 
-        # centre window on screen
+        # Center window on screen
         self.root.update_idletasks()
         w = self.root.winfo_width()
         h = self.root.winfo_height()
@@ -1189,7 +1189,6 @@ class SplashScreen:
         y = (self.root.winfo_screenheight() // 2) - (h // 2)
         self.root.geometry(f"+{x}+{y}")
 
-        # bindings & background handling
         self.root.bind("<Configure>", self.on_resize)
         self.apply_theme(self.current_theme)
         self.setup_hotkeys()
@@ -1197,12 +1196,43 @@ class SplashScreen:
         self.running = True
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
 
-        self.monitor_thread = threading.Thread(target=self.monitor_connection, daemon=True)
+        self.monitor_thread = threading.Thread(
+            target=self.monitor_connection, daemon=True
+        )
         self.monitor_thread.start()
 
-    # ------------------------------------------------------------------
-    # Helper utilities (unchanged apart from localisation)
-    # ------------------------------------------------------------------
+    # Log a message (in‑memory and to session file)
+    def log(self, message: str) -> None:
+        timestamp = time.strftime("[%H:%M:%S]")
+        line = f"{timestamp} {message}"
+        self.logs.append(line)
+        if len(self.logs) > 300:
+            self.logs.pop(0)
+        try:
+            self.session_log_file.write(line + "\n")
+            self.session_log_file.flush()
+        except Exception:
+            pass
+
+    # Keep only the most recent N session logs
+    def _enforce_log_retention(self) -> None:
+        keep = max(1, self.cfg.get("keep_logs", 10))
+        try:
+            files = sorted(
+                [f for f in os.listdir(LOGS_DIR)
+                 if f.startswith("session_") and f.endswith(".log")],
+                key=lambda x: os.path.getmtime(os.path.join(LOGS_DIR, x)),
+                reverse=True,
+            )
+            for old in files[keep:]:
+                try:
+                    os.remove(os.path.join(LOGS_DIR, old))
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+    # Hover effect helper
     def apply_hover_effects(self, widget: tk.Widget, normal_bg: str, hover_bg: str) -> None:
         widget.unbind("<Enter>")
         widget.unbind("<Leave>")
@@ -1219,28 +1249,23 @@ class SplashScreen:
             else None,
         )
 
+    # Redraw Aero background on resize
     def on_resize(self, event: tk.Event) -> None:
         if event.widget == self.root and self.current_theme == "Frutiger Aero":
             self.draw_aero_background()
 
-    def log(self, message: str) -> None:
-        timestamp = time.strftime("[%H:%M:%S]")
-        self.logs.append(f"{timestamp} {message}")
-        if len(self.logs) > 300:
-            self.logs.pop(0)
-
+    # Build target URL from configuration
     def get_target_url(self) -> str:
         proto = self.cfg.get("protocol", "http")
         return f"{proto}://{self.cfg['ip']}/{self.cfg['jnlp']}"
 
+    # Build connect button label
     def get_connect_text(self) -> str:
         t = self.THEMES.get(self.current_theme, self.THEMES["Mint"])
         pattern = t.get("connect_label", _("connect_label"))
         return pattern.format(url=self.get_target_url())
 
-    # ------------------------------------------------------------------
     # Keyboard shortcuts
-    # ------------------------------------------------------------------
     def setup_hotkeys(self) -> None:
         def handle_key(action, event):
             if isinstance(event.widget, tk.Entry):
@@ -1254,21 +1279,20 @@ class SplashScreen:
         self.root.bind("<R>", lambda e: handle_key(self.force_network_check, e))
         self.root.bind("<space>", lambda e: handle_key(self.cancel_auto_connect, e))
 
+    # Manual network refresh
     def force_network_check(self) -> None:
         self.log("Manual network refresh triggered.")
         threading.Thread(target=self._check_network_once, daemon=True).start()
 
-    # ------------------------------------------------------------------
-    # Theme handling (unchanged apart from localisation)
-    # ------------------------------------------------------------------
+    # Theme selection
     def select_theme(self, theme_key: str) -> None:
         self.cfg["theme"] = theme_key
         save_config(self.cfg)
         self.log(f"Theme changed to {theme_key}")
         self.apply_theme(theme_key)
 
+    # Apply theme and refresh translatable UI texts
     def apply_theme(self, theme_key: str) -> None:
-        """Apply a theme and also refresh all texts that depend on localisation."""
         self.current_theme = theme_key if theme_key in self.THEMES else "Mint"
         t = self.THEMES[self.current_theme]
 
@@ -1280,7 +1304,6 @@ class SplashScreen:
 
         self.root.configure(bg=t["bg"])
 
-        # Aero background handling
         if self.current_theme == "Frutiger Aero":
             self.bubble_canvas.place(x=0, y=0, relwidth=1, relheight=1)
             self.bubble_canvas.configure(bg=t["bg"])
@@ -1328,11 +1351,11 @@ class SplashScreen:
             "bd": max(1, t["bd"]),
         }
 
-        # ---- Refresh all translatable texts ---------------------------------
+        # Refresh translatable texts
         self.settings_btn.configure(text=_("settings_label"))
         self.theme_mb.configure(text="Theme ▾")
         self.cancel_auto_btn.configure(text=_("cancel_label"))
-        self.auto_lbl.configure(text="")                     # will be set later by auto‑countdown
+        self.auto_lbl.configure(text="")
         self.connect_btn.configure(
             text=self.get_connect_text(),
             font=button_font,
@@ -1371,9 +1394,7 @@ class SplashScreen:
         )
         self.auto_lbl.configure(font=sub_font, bg=t["bg"], fg=t["text"])
 
-    # ------------------------------------------------------------------
-    # Frutiger Aero background drawing & animation (unchanged)
-    # ------------------------------------------------------------------
+    # Draw Aero background (sky, water, aurora)
     def draw_aero_background(self) -> None:
         if not hasattr(self, "bubble_canvas") or not hasattr(self, "aurora_phase"):
             return
@@ -1382,7 +1403,6 @@ class SplashScreen:
         w = max(self.root.winfo_width(), 740)
         h = max(self.root.winfo_height(), 400)
 
-        # sky gradient banding
         sky_colors = ["#00325B", "#0D518A", "#1A6BB0", "#2E8AD6", "#50AAEE", "#8AD1FF"]
         band_h = h * 0.72 / len(sky_colors)
         for i, col in enumerate(sky_colors):
@@ -1390,7 +1410,6 @@ class SplashScreen:
             y2 = (i + 1) * band_h + 1
             self.bubble_canvas.create_rectangle(0, y1, w, y2, fill=col, outline="", tags="aero_bg")
 
-        # water horizon
         water_colors = ["#32B67A", "#18A585", "#0E838F", "#085773", "#04324B"]
         horizon_y = h * 0.68
         w_band_h = (h - horizon_y) / len(water_colors)
@@ -1399,7 +1418,6 @@ class SplashScreen:
             y2 = horizon_y + ((i + 1) * w_band_h) + 1
             self.bubble_canvas.create_rectangle(0, y1, w, y2, fill=col, outline="", tags="aero_bg")
 
-        # aurora wave
         sin_y = math.sin(self.aurora_phase) * 15
         cos_y = math.cos(self.aurora_phase * 0.8) * 12
 
@@ -1425,6 +1443,7 @@ class SplashScreen:
 
         self.bubble_canvas.tag_lower("aero_bg")
 
+    # Initialize bubbles and orbs for Aero animation
     def init_bubbles(self) -> None:
         self.draw_aero_background()
         self.bubble_canvas.delete("aero_obj")
@@ -1494,6 +1513,7 @@ class SplashScreen:
                 }
             )
 
+    # Animate bubbles and orbs
     def animate_bubbles(self) -> None:
         if not getattr(self, "running", True) or self.current_theme != "Frutiger Aero":
             return
@@ -1532,15 +1552,13 @@ class SplashScreen:
 
         self.bubble_anim_job = self.root.after(35, self.animate_bubbles)
 
-    # ------------------------------------------------------------------
-    # Network monitoring (unchanged apart from localisation)
-    # ------------------------------------------------------------------
+    # Single network check (ping then HTTP)
     def _check_network_once(self) -> None:
         connected = False
         latency_ms = None
         proto = self.cfg.get("protocol", "http")
 
-        # ping test
+        # Ping test
         try:
             res = subprocess.run(
                 ["ping", "-c", "1", "-W", "2", self.cfg["ip"]],
@@ -1579,7 +1597,7 @@ class SplashScreen:
         if connected:
             self.has_connected_once = True
 
-        # Disconnect tracking while javaws runs
+        # Track disconnection while Java WebStart runs
         if self.ows_process and self.ows_process.poll() is None:
             if not connected:
                 if self.disconnect_start_time is None:
@@ -1629,31 +1647,34 @@ class SplashScreen:
             ):
                 self.root.after(0, self.start_auto_countdown)
 
+    # Continuous network monitoring thread
     def monitor_connection(self) -> None:
         while getattr(self, "running", True):
             self._check_network_once()
             time.sleep(2.0)
 
-    # ------------------------------------------------------------------
-    # Auto‑connect countdown UI
-    # ------------------------------------------------------------------
+    # Start auto‑connect countdown
     def start_auto_countdown(self) -> None:
         self.countdown_val = 3
         self.auto_frame.pack(pady=5)
         self.tick_countdown()
 
+    # Countdown tick
     def tick_countdown(self) -> None:
         if not self.is_connected or self.auto_cancel or self.is_launching:
             self.auto_frame.pack_forget()
             return
         if self.countdown_val > 0:
-            self.auto_lbl.configure(text=_("auto_connecting_in").format(sec=self.countdown_val))
+            self.auto_lbl.configure(
+                text=_("auto_connecting_in").format(sec=self.countdown_val)
+            )
             self.countdown_val -= 1
             self.countdown_timer = self.root.after(1000, self.tick_countdown)
         else:
             self.auto_frame.pack_forget()
             self.launch_javaws()
 
+    # Cancel auto‑connect
     def cancel_auto_connect(self) -> None:
         self.auto_cancel = True
         if self.countdown_timer:
@@ -1665,9 +1686,7 @@ class SplashScreen:
         self.auto_frame.pack_forget()
         self.log(_("cancel_label"))
 
-    # ------------------------------------------------------------------
-    # Settings / import / export / log viewer (all translatable)
-    # ------------------------------------------------------------------
+    # Open log viewer with “Keep Session Logs” control
     def open_log_viewer(self) -> None:
         t = self.THEMES.get(self.current_theme, self.THEMES["Mint"])
         win = tk.Toplevel(self.root)
@@ -1687,14 +1706,40 @@ class SplashScreen:
             fg=txt_fg,
             font=("Monospace", 9),
             wrap="none",
-            width=70,
-            height=18,
+            width=80,
+            height=20,
             relief=txt_relief,
             bd=txt_bd,
         )
         txt.pack(fill="both", expand=True, padx=12, pady=12)
-        txt.insert("1.0", "\n".join(self.logs))
+
+        try:
+            with open(self.session_log_path, "r", encoding="utf-8") as f:
+                content = f.read()
+        except Exception:
+            content = "\n".join(self.logs)
+
+        txt.insert("1.0", content)
         txt.configure(state="disabled")
+
+        # Keep Session Logs control
+        keep_frame = tk.Frame(win, bg=t["bg"])
+        keep_frame.pack(fill="x", pady=(0, 12), padx=12)
+
+        ttk.Label(keep_frame, text="Keep Session Logs:",
+                  background=t["bg"], foreground=t["text"]).pack(side="left")
+        keep_var = tk.IntVar(value=self.cfg.get("keep_logs", 10))
+        keep_spin = ttk.Spinbox(
+            keep_frame, from_=1, to=100, textvariable=keep_var, width=5
+        )
+        keep_spin.pack(side="left", padx=5)
+
+        def on_keep_change(*_):
+            self.cfg["keep_logs"] = max(1, keep_var.get())
+            save_config(self.cfg)
+            self._enforce_log_retention()
+
+        keep_var.trace_add("write", on_keep_change)
 
         def close_logs():
             try:
@@ -1727,6 +1772,7 @@ class SplashScreen:
         ry = self.root.winfo_y() + (self.root.winfo_height() // 2) - (win.winfo_height() // 2)
         win.geometry(f"+{rx}+{ry}")
 
+    # Export configuration to a user‑chosen file
     def export_config(self) -> None:
         file_path = filedialog.asksaveasfilename(
             defaultextension=".json",
@@ -1737,10 +1783,11 @@ class SplashScreen:
             try:
                 with open(file_path, "w") as f:
                     json.dump(self.cfg, f, indent=2)
-                messagebox.showinfo(_("export_btn"), f"{_("export_btn")}:\n{file_path}")
+                messagebox.showinfo(_("export_btn"), f"{_('export_btn')}:\n{file_path}")
             except Exception as e:
                 messagebox.showerror(_("install_failed"), str(e))
 
+    # Import configuration from a user‑chosen file
     def import_config(self) -> bool:
         file_path = filedialog.askopenfilename(
             filetypes=[("JSON Files", "*.json")],
@@ -1761,6 +1808,7 @@ class SplashScreen:
                 messagebox.showerror(_("install_failed"), str(e))
         return False
 
+    # Settings dialog (live preview, persistence, logging control)
     def open_settings(self) -> None:
         t = self.THEMES.get(self.current_theme, self.THEMES["Mint"])
         win = tk.Toplevel(self.root)
@@ -1779,23 +1827,20 @@ class SplashScreen:
         auto_var = tk.BooleanVar(value=self.cfg.get("auto_launch", False))
         lang_var = tk.StringVar(value=self.cfg.get("lang", "en"))
 
-        def update_live_preview(*_):
+        def update_live_preview(*_args):
             self.cfg["protocol"] = proto_var.get()
             self.cfg["ip"] = ip_var.get().strip() or "192.168.1.200"
             self.cfg["jnlp"] = jnlp_var.get().strip() or "admin.jnlp"
             self.cfg["lang"] = lang_var.get()
             if not self.is_launching:
                 self.connect_btn.configure(text=self.get_connect_text())
-                # also update other UI texts that depend on language
                 self.settings_btn.configure(text=_("settings_label"))
                 self.quit_btn.configure(text=_("quit_label"))
                 self.cancel_auto_btn.configure(text=_("cancel_label"))
-                self.auto_lbl.configure(text="")  # will be refreshed when auto‑connect starts
+                self.auto_lbl.configure(text="")
 
-        proto_var.trace_add("write", update_live_preview)
-        ip_var.trace_add("write", update_live_preview)
-        jnlp_var.trace_add("write", update_live_preview)
-        lang_var.trace_add("write", update_live_preview)
+        for var in (proto_var, ip_var, jnlp_var, lang_var):
+            var.trace_add("write", update_live_preview)
 
         entry_relief = "sunken" if self.current_theme in ("Windows 98", "Frutiger Aero") else "flat"
         entry_bd = 2 if self.current_theme == "Windows 98" else 1
@@ -1824,7 +1869,7 @@ class SplashScreen:
             win,
             text=_("auto_launch_label"),
             variable=auto_var,
-        ).grid(row=row, column=0, columnspan=2, sticky="w", padx=10, pady=8)
+        ).grid(row=row, column=0, columnspan=2, sticky="n", pady=8)
 
         row += 1
         ttk.Label(win, text=_("language_label")).grid(row=row, column=0, sticky="e", padx=10, pady=8)
@@ -1843,16 +1888,24 @@ class SplashScreen:
         row += 1
         tools_frame = ttk.Frame(win)
         tools_frame.grid(row=row, column=0, columnspan=2, pady=12, padx=10, sticky="ew")
-        ttk.Button(tools_frame, text=_("import_btn"), command=self.import_config, style="Small.TButton").pack(side="left", padx=5)
-        ttk.Button(tools_frame, text=_("export_btn"), command=self.export_config, style="Small.TButton").pack(side="left", padx=5)
-        ttk.Button(tools_frame, text=_("view_logs_btn"), command=self.open_log_viewer, style="Small.TButton").pack(side="right", padx=5)
+        ttk.Button(tools_frame, text=_("import_btn"),
+                   command=self.import_config, style="Small.TButton").pack(side="left", padx=5)
+        ttk.Button(tools_frame, text=_("export_btn"),
+                   command=self.export_config, style="Small.TButton").pack(side="left", padx=5)
+
+        # Logs folder button
+        ttk.Button(tools_frame, text="Logs Folder",
+                   command=lambda: subprocess.Popen(["xdg-open", LOGS_DIR]),
+                   style="Small.TButton").pack(side="left", padx=5)
+
+        ttk.Button(tools_frame, text=_("view_logs_btn"),
+                   command=self.open_log_viewer, style="Small.TButton").pack(side="right", padx=5)
 
         def save_and_close():
             self.cfg["auto_launch"] = auto_var.get()
             self.cfg["lang"] = lang_var.get()
             self.auto_cancel = False
             save_config(self.cfg)
-            # Refresh the whole launcher UI with the new language
             self.apply_theme(self.cfg.get("theme", self.current_theme))
             win.grab_release()
             win.destroy()
@@ -1869,22 +1922,23 @@ class SplashScreen:
         row += 1
         btn_frame = ttk.Frame(win)
         btn_frame.grid(row=row, column=0, columnspan=2, pady=(5, 15))
-        ttk.Button(btn_frame, text=_("save_btn"), width=10, command=save_and_close, style="Small.TButton").pack(side="left", padx=8)
-        ttk.Button(btn_frame, text=_("cancel_btn"), width=10, command=cancel_and_close, style="Small.TButton").pack(side="left", padx=8)
+        ttk.Button(btn_frame, text=_("save_btn"), width=10,
+                   command=save_and_close, style="Small.TButton").pack(side="left", padx=8)
+        ttk.Button(btn_frame, text=_("cancel_btn"), width=10,
+                   command=cancel_and_close, style="Small.TButton").pack(side="left", padx=8)
 
         win.update_idletasks()
         rx = self.root.winfo_x() + (self.root.winfo_width() // 2) - (win.winfo_width() // 2)
         ry = self.root.winfo_y() + (self.root.winfo_height() // 2) - (win.winfo_height() // 2)
         win.geometry(f"+{rx}+{ry}")
 
-    # ------------------------------------------------------------------
-    # Java WebStart launch handling
-    # ------------------------------------------------------------------
+    # Monitor Java WebStart process and close launcher when it ends
     def _watch_ows_lifecycle(self) -> None:
         if self.ows_process:
             self.ows_process.wait()
         self.root.after(0, self.on_close)
 
+    # Launch Java WebStart with the target URL
     def launch_javaws(self) -> None:
         if self.is_launching:
             return
@@ -1901,9 +1955,16 @@ class SplashScreen:
         try:
             self.ows_process = subprocess.Popen(
                 [javaws_bin, target_url],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
             )
+            # Capture stderr for logs
+            def capture_err():
+                for line in self.ows_process.stderr:
+                    self.log(f"javaws: {line.rstrip()}")
+            threading.Thread(target=capture_err, daemon=True).start()
+
             self.root.withdraw()
             threading.Thread(target=self._watch_ows_lifecycle, daemon=True).start()
         except Exception as e:
@@ -1912,11 +1973,10 @@ class SplashScreen:
             self.root.deiconify()
             self.connect_btn.configure(text=self.get_connect_text(), state="normal")
             self.apply_theme(self.current_theme)
-            messagebox.showerror(_("launch_error").split(":")[0], _("launch_error").format(err=str(e)))
+            messagebox.showerror(_("launch_error").split(":")[0],
+                                _("launch_error").format(err=str(e)))
 
-    # ------------------------------------------------------------------
-    # Clean shutdown
-    # ------------------------------------------------------------------
+    # Clean shutdown (stop timers, close files, exit)
     def on_close(self) -> None:
         self.running = False
 
@@ -1935,6 +1995,11 @@ class SplashScreen:
             self.countdown_timer = None
 
         try:
+            self.session_log_file.close()
+        except Exception:
+            pass
+
+        try:
             self.root.destroy()
         except Exception:
             pass
@@ -1945,16 +2010,12 @@ class SplashScreen:
 # Entry‑point
 # ----------------------------------------------------------------------
 if __name__ == "__main__":
-    # ------------------------------------------------------------------
-    # Verify prerequisites – if missing, launch the installer.
-    # ------------------------------------------------------------------
+    # Verify prerequisites – launch installer if missing
     if not check_prerequisites():
         run_prerequisite_installer()
         sys.exit(0)
 
-    # ------------------------------------------------------------------
-    # All good – start the main launcher immediately (no splash, no sound).
-    # ------------------------------------------------------------------
+    # Launch main UI
     root = tk.Tk()
     set_ui_scaling(root)                # ensure proper DPI scaling before UI creation
     app = SplashScreen(root)
